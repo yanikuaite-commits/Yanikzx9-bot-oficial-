@@ -1,0 +1,21 @@
+# Dependências
+node_modules/
+
+# Sessão do WhatsApp (Baileys) — gerada automaticamente ao emparelhar
+sessao_kortex/
+
+# Dados gerados pelo bot em runtime
+data/bot_data.json
+data/historico.json
+data/banners/
+
+# Ambiente
+.env
+
+# Logs
+*.log
+npm-debug.log*
+
+# Sistema
+.DS_Store
+Thumbs.db
