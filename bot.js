@@ -187,7 +187,7 @@ const videos = formatos.filter(f => f.type === 'video');
 if (!videos.length) return null;
 return videos.find(f => f.ext === 'mp4' && /360|480/.test(f.label || '')) || videos.find(f => f.ext === 'mp4') || videos[0];
 }
-async function baixarBufferGen(formato, maxBytes = 64 * 1024 * 1024) {
+async function baixarBufferGen(formato, maxBytes = 32 * 1024 * 1024) {
 if (!formato?.url) return null;
 if (formato.filesize && formato.filesize > maxBytes) return null;
 const r = await axios.get(formato.url, { responseType: 'arraybuffer', timeout: 180000 });
@@ -986,7 +986,12 @@ return null;
 // ⚡ OPT — fila de processamento (máx. 3 mensagens pesadas em paralelo)
 let procAtivos = 0;
 const procFila = [];
+const PROC_FILA_MAX = 100;
 function enfileirarProcessamento(fn) {
+if (procFila.length >= PROC_FILA_MAX) {
+console.warn(`⚠️ Fila cheia (${PROC_FILA_MAX}); mensagem descartada.`);
+return;
+}
 procFila.push(fn);
 processarFila();
 }
@@ -2625,6 +2630,15 @@ for (const [chave, usos] of db.rateLimit) {
 const aindaValidos = usos.filter(t => agora - t < maiorJanela);
 if (aindaValidos.length === 0) db.rateLimit.delete(chave);
 else if (aindaValidos.length !== usos.length) db.rateLimit.set(chave, aindaValidos);
+}
+}, 15 * 60 * 1000);
+setInterval(() => {
+const agora = Date.now();
+for (const [chatId, ultimoUso] of db.historicoIAUltimoUso) {
+if (agora - ultimoUso > 30 * 60 * 1000) {
+db.historicoIAUltimoUso.delete(chatId);
+db.historicoIA.delete(chatId);
+}
 }
 }, 15 * 60 * 1000);
 setInterval(() => {
