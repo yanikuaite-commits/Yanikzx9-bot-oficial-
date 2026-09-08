@@ -2607,6 +2607,7 @@ expiraEm: Date.now() + 600000
 let reconnectAttempts = 0, pausado = false, geracaoAtual = 0, sockAtual = null;
 let ultimasMensagensIds = [];
 let mensagensIgnoradas = new Set();
+const mensagensEnviadasPeloBot = new Set();
 
 // ⚡ OPT — intervals AO NÍVEL DO MÓDULO (registados 1 única vez).
 // Antes estavam dentro de startBot() → duplicavam a cada reconexão (leak).
@@ -2696,7 +2697,11 @@ console.log(`${cyan}╚${'═'.repeat(largura)}╝${reset}\n`);
 // ══════════════════════════════════════════════════════════
 async function processarMensagem(sock, msg) {
 const minhaGeracao = geracaoAtual;
-if (!msg.message || msg.key.fromMe) return;
+if (!msg.message) return;
+if (msg.key.fromMe && mensagensEnviadasPeloBot.has(msg.key.id)) {
+mensagensEnviadasPeloBot.delete(msg.key.id);
+return;
+}
 if (msg.key.id && mensagensIgnoradas.has(msg.key.id)) { mensagensIgnoradas.delete(msg.key.id); return; }
 const chatId = msg.key.remoteJid;
 if (chatId === 'status@broadcast' || chatId?.endsWith('@broadcast')) return;
@@ -2720,10 +2725,10 @@ const vip = db.usersVIP.get(senderId);
 const isVipActivo = vip && vip.expiraEm > Date.now();
 if (!isVipActivo) {
 const ultimoEnvio = db.ultimoCartaoPV.get(senderId) || 0;
-if (Date.now() - ultimoEnvio < 10 * 60 * 1000) return;
+if (Date.now() - ultimoEnvio >= 10 * 60 * 1000) {
 db.ultimoCartaoPV.set(senderId, Date.now());
 await sock.sendMessage(chatId, { text: gerarCartaoApresentacao() });
-return;
+}
 }
 }
 try {
@@ -3197,6 +3202,18 @@ printQRInTerminal: false, browser: ['Ubuntu', 'Chrome', '20.0.04'],
 logger: pino({ level: 'fatal' }), syncFullHistory: false, markOnlineOnConnect: true,
 getMessage: async () => undefined // ⚡ OPT — evita falhas internas em retries
 });
+const enviarMensagemOriginal = sock.sendMessage.bind(sock);
+sock.sendMessage = async (...args) => {
+const resultado = await enviarMensagemOriginal(...args);
+if (resultado?.key?.id) {
+mensagensEnviadasPeloBot.add(resultado.key.id);
+if (mensagensEnviadasPeloBot.size > 1000) {
+const primeiroId = mensagensEnviadasPeloBot.values().next().value;
+mensagensEnviadasPeloBot.delete(primeiroId);
+}
+}
+return resultado;
+};
 sockAtual = sock;
 if (!sock.authState.creds.registered) {
 setTimeout(async () => {

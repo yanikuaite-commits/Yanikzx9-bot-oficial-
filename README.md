@@ -72,7 +72,7 @@ kortex-bot/
 │   └── (bot_data.json, historico.json, banners/... são criados
 │        automaticamente na primeira execução)
 └── media/
-    └── kortex/           ← as 13 imagens oficiais dos menus (ver tabela acima)
+   └── kortex/           ← as 13 imagens oficiais dos menus (ver tabela acima)
 ```
 
 > **Nota:** a pasta `sessao_kortex/` (sessão do WhatsApp) e a pasta
