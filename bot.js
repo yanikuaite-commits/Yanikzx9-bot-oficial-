@@ -66,36 +66,18 @@ games: path.join(__dirname, 'media', 'kortex', 'games.jpg')
 const KEY_UNIVERSAL_DONO = "8414"; // NUNCA expor em menus/logs/mensagens públicas
 
 // ══════════════════════════════════════════════════════════
-// GROQ — suporta até 9 chaves. Se uma falhar, tenta a próxima.
+// GROQ — usa uma única chave API.
 // ══════════════════════════════════════════════════════════
-const GROQ_API_KEYS = [
-"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",
-"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",
-"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",
-"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",
-"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",
-"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",
-"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",
-"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",
-"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",
-].filter(k => k && !k.startsWith('COLE_AQUI'));
-const groqClients = GROQ_API_KEYS.map(key => new Groq({ apiKey: key }));
-const groq = groqClients[0];
-let groqIndiceAtual = 0;
-async function comFallbackGroq(fn) {
-let ultimoErro = null;
-for (let i = 0; i < groqClients.length; i++) {
-const idx = (groqIndiceAtual + i) % groqClients.length;
+const GROQ_API_KEY =
+"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";
+const groq = new Groq({ apiKey: GROQ_API_KEY });
+async function comGroq(fn) {
 try {
-const resultado = await fn(groqClients[idx]);
-groqIndiceAtual = idx;
-return resultado;
+return await fn(groq);
 } catch (e) {
-ultimoErro = e;
-console.warn(`⚠️ Chave Groq #${idx + 1}/${groqClients.length} falhou: ${String(e.message).substring(0, 120)}`);
+console.warn(`⚠️ Erro na API Groq: ${String(e.message).substring(0, 160)}`);
+throw e;
 }
-}
-throw ultimoErro || new Error('Todas as chaves Groq falharam.');
 }
 const server = http.createServer((req, res) => {
 res.writeHead(200, { 'Content-Type': 'text/html' });
@@ -690,7 +672,7 @@ async function perguntarGroq(prompt) {
 const modelos = [CONFIG.groq_model, ...GROQ_MODELOS_FALLBACK].filter((m, i, a) => m && a.indexOf(m) === i);
 for (const modelo of modelos) {
 try {
-const c = await comFallbackGroq(client => client.chat.completions.create({ messages: [{ role: 'user', content: prompt }], model: modelo, temperature: 0.5, max_tokens: 120 }));
+const c = await comGroq(client => client.chat.completions.create({ messages: [{ role: 'user', content: prompt }], model: modelo, temperature: 0.5, max_tokens: 120 }));
 return c.choices[0]?.message?.content?.trim();
 } catch {}
 }
@@ -721,7 +703,7 @@ const modelos = [CONFIG.groq_model, process.env.GROQ_MODEL, ...GROQ_MODELOS_FALL
 let resposta = null, ultimoErro = null;
 for (const modelo of modelos) {
 try {
-const completion = await comFallbackGroq(client => client.chat.completions.create({ messages: [{ role: 'system', content: systemMsg }, ...history], model: modelo, temperature: 0.5, max_tokens: 250 }));
+const completion = await comGroq(client => client.chat.completions.create({ messages: [{ role: 'system', content: systemMsg }, ...history], model: modelo, temperature: 0.5, max_tokens: 250 }));
 resposta = completion.choices[0]?.message?.content?.trim();
 CONFIG.groq_model = modelo;
 break;
@@ -1183,7 +1165,7 @@ const cmd = ffmpeg(tmpIn).toFormat('mp3').save(tmpOut);
 const to = setTimeout(() => { try { cmd.kill('SIGKILL'); } catch {} rej(new Error('ffmpeg timeout')); }, 120000);
 cmd.on('end', () => { clearTimeout(to); res(); }).on('error', (e) => { clearTimeout(to); rej(e); });
 });
-const r = await comFallbackGroq(client => client.audio.transcriptions.create({ file: fs.createReadStream(tmpOut), model: 'whisper-large-v3' }));
+const r = await comGroq(client => client.audio.transcriptions.create({ file: fs.createReadStream(tmpOut), model: 'whisper-large-v3' }));
 try { fs.unlinkSync(tmpIn); fs.unlinkSync(tmpOut); } catch {}
 await sock.sendMessage(ctx.chatId, { text: `🎙️ *Transcrição:*\n\n"${r.text || '…'}"` });
 } catch (e) { console.warn('transcrever:', e.message); await sock.sendMessage(ctx.chatId, { text: '❌ Não consegui transcrever este áudio.' }); }
