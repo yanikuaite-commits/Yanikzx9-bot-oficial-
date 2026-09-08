@@ -69,7 +69,7 @@ const KEY_UNIVERSAL_DONO = "8414"; // NUNCA expor em menus/logs/mensagens públi
 // GROQ — usa uma única chave API.
 // ══════════════════════════════════════════════════════════
 const GROQ_API_KEY =
-"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";
+"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";
 const groq = new Groq({ apiKey: GROQ_API_KEY });
 async function comGroq(fn) {
 try {
