@@ -19,3 +19,6 @@ npm-debug.log*
 # Sistema
 .DS_Store
 Thumbs.db
+
+# Firebase service account secrets
+*-firebase-adminsdk-*.json

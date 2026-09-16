@@ -19,6 +19,30 @@ const ffmpeg = require('fluent-ffmpeg');
 const ffmpegPath = require('ffmpeg-static');
 if (ffmpegPath) ffmpeg.setFfmpegPath(ffmpegPath);
 
+let fb = null;
+try {
+  fb = require('./firebaseHelpers');
+  console.log('🔥 Firebase carregado');
+} catch (e) {
+  console.warn('⚠️ Firebase não carregou:', e.message);
+}
+
+let _fbSyncTimer = null;
+function agendarSyncFirebase(payload) {
+  if (!fb || !payload) return;
+  if (_fbSyncTimer) clearTimeout(_fbSyncTimer);
+  _fbSyncTimer = setTimeout(async () => {
+    _fbSyncTimer = null;
+    try {
+      await fb.Backup.salvarTudo(payload);
+      console.log('☁️ Backup Firebase atualizado');
+    } catch (e) {
+      console.warn('⚠️ Firebase backup falhou:', e.message);
+    }
+  }, 5000);
+  if (_fbSyncTimer.unref) _fbSyncTimer.unref();
+}
+
 // ══════════════════════════════════════════════════════════
 // ⚡ OPT — ESTABILIDADE GLOBAL (erros isolados não derrubam o processo)
 // ══════════════════════════════════════════════════════════
@@ -92,13 +116,14 @@ server.listen(process.env.PORT || 3000, () => console.log(`🌐 HTTP na porta ${
 const db = {
 gruposVIP: new Map(), grupoDono: new Map(), historicoIA: new Map(), historicoIAUltimoUso: new Map(),
 statusDono: null, historicoGrupos: new Map(), atalhos: new Map(), ultimoCartaoPV: new Map(), usersVIP: new Map(),
-warns: new Map(), mutados: new Map(),
+warns: new Map(), mutados: new Map(), spamMonitor: new Map(), mediaSpamMonitor: new Map(),
 grupos: {
 antiLink: new Map(), palavrasBanidas: new Map(), banidos: new Map(), boasvindas: new Map(), regras: new Map(),
 iaAtivo: new Set(), desligados: new Set(), comandosDesativados: new Map(), semPrefixo: new Set(), antiMidia: new Map()
 },
 ignorados: new Set(), whitelist: new Map(), autoDelete: new Map(), indicadores: new Map(),
 stats: new Map(), notifications: new Map(), cache: new Map(), rateLimit: new Map(),
+modoInternet: new Map(), tabelasPagamento: new Map(), pedidosPagamento: new Map(), pedidosPendentes: new Map(),
 // KORTEX KEY SYSTEM — Novas estruturas (REGRA 9)
 keysRandom: new Map(),
 fluxosKey: new Map(),
@@ -142,6 +167,18 @@ if (agora > fluxo.expiraEm) db.fluxosKey.delete(chatId);
 // KORTEX KEY SYSTEM — Limpar alertas expirados
 for (const [id, alerta] of db.alertasKey) {
 if (agora > alerta.expiraEm) db.alertasKey.delete(id);
+}
+for (const [chatId, byUser] of db.spamMonitor) {
+for (const [senderId, info] of byUser) {
+if (agora - (info.last || agora) > 15000) byUser.delete(senderId);
+}
+if (!byUser.size) db.spamMonitor.delete(chatId);
+}
+for (const [chatId, byUser] of db.mediaSpamMonitor) {
+for (const [senderId, info] of byUser) {
+if (agora - (info.last || agora) > 20000) byUser.delete(senderId);
+}
+if (!byUser.size) db.mediaSpamMonitor.delete(chatId);
 }
 }, 30000);
 
@@ -339,6 +376,7 @@ const COMANDOS_SENSIVEIS = new Set([
 'advertir','removeradvertencia','antimidia','autodelete',
 'notificar','ia','entrar','atalho','removeratalho',
 'prefixo','backup','restaurar','modelo','marcartodos','agendar',
+'modointernet','tabelapagamento','pedidos','receberpedido','rejeitarpedido',
 // KORTEX KEY SYSTEM — Novos comandos sensíveis (REGRA 16)
 'gerarkey','desativarkey','mudarkey'
 ]);
@@ -408,11 +446,25 @@ mutados: Object.fromEntries([...db.mutados].map(([k, v]) => [k, Object.fromEntri
 semPrefixo: [...db.grupos.semPrefixo],
 antiMidia: Object.fromEntries([...db.grupos.antiMidia].map(([k, v]) => [k, [...v]])),
 agendamentos: Object.fromEntries(agendamentos),
+modoInternet: Object.fromEntries(db.modoInternet),
+tabelasPagamento: Object.fromEntries([...db.tabelasPagamento].map(([k, v]) => [k, Array.isArray(v) ? v : [...(v||[])]])),
+pedidosPagamento: Object.fromEntries([...db.pedidosPagamento].map(([k, v]) => [k, v])),
+pedidosPendentes: Object.fromEntries(db.pedidosPendentes),
 // KORTEX KEY SYSTEM — Salvar Keys Random (REGRA 9)
 keysRandom: Object.fromEntries(db.keysRandom)
 };
 fs.writeFileSync(CONFIG.dataFile, JSON.stringify(data, null, 2), 'utf8');
 fs.writeFileSync(CONFIG.historicoFile, JSON.stringify(Object.fromEntries(db.historicoGrupos), null, 2), 'utf8');
+try {
+const payloadFirebase = {
+...data,
+alertasKey: Object.fromEntries(db.alertasKey),
+historicoGrupos: Object.fromEntries(db.historicoGrupos),
+groq_model: CONFIG.groq_model || null,
+atualizadoEm: Date.now()
+};
+agendarSyncFirebase(payloadFirebase);
+} catch {}
 if (global.gc) { try { global.gc(); } catch {} }
 } catch (e) { console.error('Erro ao guardar dados:', e.message); }
 }
@@ -426,6 +478,80 @@ if (_saveTimer.unref) _saveTimer.unref();
 process.on('exit', () => { try { escreverDados(); } catch {} });
 process.on('SIGINT', () => { try { escreverDados(); } catch {} process.exit(0); });
 process.on('SIGTERM', () => { try { escreverDados(); } catch {} process.exit(0); });
+
+function aplicarBackupFirebase(data) {
+  try {
+    if (!data || typeof data !== 'object') return false;
+
+    db.gruposVIP.clear();
+    db.grupoDono.clear();
+    db.atalhos.clear();
+    db.grupos.antiLink.clear();
+    db.grupos.palavrasBanidas.clear();
+    db.grupos.boasvindas.clear();
+    db.grupos.regras.clear();
+    db.grupos.banidos.clear();
+    db.grupos.iaAtivo.clear();
+    db.grupos.desligados.clear();
+    db.ignorados.clear();
+    db.whitelist.clear();
+    db.autoDelete.clear();
+    db.indicadores.clear();
+    db.stats.clear();
+    db.notifications.clear();
+    db.usersVIP.clear();
+    db.grupos.comandosDesativados.clear();
+    db.warns.clear();
+    db.mutados.clear();
+    db.grupos.semPrefixo.clear();
+    db.grupos.antiMidia.clear();
+    db.modoInternet.clear();
+    db.tabelasPagamento.clear();
+    db.pedidosPagamento.clear();
+    db.pedidosPendentes.clear();
+    db.keysRandom.clear();
+    db.historicoGrupos.clear();
+    db.alertasKey.clear();
+    agendamentos.clear();
+
+    if (data.gruposVIP) for (const [k, v] of Object.entries(data.gruposVIP)) db.gruposVIP.set(k, v);
+    if (data.grupoDono) for (const [k, v] of Object.entries(data.grupoDono)) db.grupoDono.set(k, v);
+    if (data.atalhos) for (const [k, v] of Object.entries(data.atalhos)) db.atalhos.set(k, v);
+    if (data.antiLink) for (const [k, v] of Object.entries(data.antiLink)) db.grupos.antiLink.set(k, v);
+    if (data.palavrasBanidas) for (const [k, v] of Object.entries(data.palavrasBanidas)) db.grupos.palavrasBanidas.set(k, v);
+    if (data.boasvindas) for (const [k, v] of Object.entries(data.boasvindas)) db.grupos.boasvindas.set(k, v);
+    if (data.regras) for (const [k, v] of Object.entries(data.regras)) db.grupos.regras.set(k, v);
+    if (data.banidos) for (const [k, v] of Object.entries(data.banidos)) db.grupos.banidos.set(k, v);
+    if (data.iaAtivo) for (const id of data.iaAtivo) db.grupos.iaAtivo.add(id);
+    if (data.desligados) for (const id of data.desligados) db.grupos.desligados.add(id);
+    if (data.ignorados) for (const id of data.ignorados) db.ignorados.add(id);
+    if (data.whitelist) for (const [k, v] of Object.entries(data.whitelist)) db.whitelist.set(k, new Set(v));
+    if (data.autoDelete) for (const [k, v] of Object.entries(data.autoDelete)) db.autoDelete.set(k, v);
+    if (data.indicadores) for (const [k, v] of Object.entries(data.indicadores)) db.indicadores.set(k, v);
+    if (data.stats) for (const [k, v] of Object.entries(data.stats)) db.stats.set(k, v);
+    if (data.notifications) for (const [k, v] of Object.entries(data.notifications)) db.notifications.set(k, v);
+    if (data.prefixo) CONFIG.prefix = data.prefixo;
+    if (data.usersVIP) for (const [k, v] of Object.entries(data.usersVIP)) db.usersVIP.set(k, v);
+    if (data.comandosDesativados) for (const [k, v] of Object.entries(data.comandosDesativados)) db.grupos.comandosDesativados.set(k, new Set(v));
+    if (data.warns) for (const [k, v] of Object.entries(data.warns)) db.warns.set(k, new Map(Object.entries(v)));
+    if (data.mutados) for (const [k, v] of Object.entries(data.mutados)) db.mutados.set(k, new Map(Object.entries(v)));
+    if (data.semPrefixo) for (const id of data.semPrefixo) db.grupos.semPrefixo.add(id);
+    if (data.antiMidia) for (const [k, v] of Object.entries(data.antiMidia)) db.grupos.antiMidia.set(k, new Set(v));
+    if (data.agendamentos) for (const [k, v] of Object.entries(data.agendamentos)) agendamentos.set(k, v);
+    if (data.modoInternet) for (const [k, v] of Object.entries(data.modoInternet)) db.modoInternet.set(k, !!v);
+    if (data.tabelasPagamento) for (const [k, v] of Object.entries(data.tabelasPagamento)) db.tabelasPagamento.set(k, Array.isArray(v) ? v : []);
+    if (data.pedidosPagamento) for (const [k, v] of Object.entries(data.pedidosPagamento)) db.pedidosPagamento.set(k, v);
+    if (data.pedidosPendentes) for (const [k, v] of Object.entries(data.pedidosPendentes)) db.pedidosPendentes.set(k, v);
+    if (data.keysRandom) for (const [k, v] of Object.entries(data.keysRandom)) db.keysRandom.set(k, v);
+    if (data.historicoGrupos) for (const [k, v] of Object.entries(data.historicoGrupos)) db.historicoGrupos.set(k, Array.isArray(v) ? v : []);
+    if (data.alertasKey) for (const [k, v] of Object.entries(data.alertasKey)) db.alertasKey.set(k, v);
+    if (data.groq_model) CONFIG.groq_model = data.groq_model;
+    return true;
+  } catch (e) {
+    console.warn('⚠️ Erro ao aplicar backup Firebase:', e.message);
+    return false;
+  }
+}
 
 function carregarDados() {
 try {
@@ -457,8 +583,13 @@ if (data.mutados) for (const [k, v] of Object.entries(data.mutados)) db.mutados.
 if (data.semPrefixo) for (const id of data.semPrefixo) db.grupos.semPrefixo.add(id);
 if (data.antiMidia) for (const [k, v] of Object.entries(data.antiMidia)) db.grupos.antiMidia.set(k, new Set(v));
 if (data.agendamentos) for (const [k, v] of Object.entries(data.agendamentos)) agendamentos.set(k, v);
+if (data.modoInternet) for (const [k, v] of Object.entries(data.modoInternet)) db.modoInternet.set(k, !!v);
+if (data.tabelasPagamento) for (const [k, v] of Object.entries(data.tabelasPagamento)) db.tabelasPagamento.set(k, Array.isArray(v) ? v : []);
+if (data.pedidosPagamento) for (const [k, v] of Object.entries(data.pedidosPagamento)) db.pedidosPagamento.set(k, v);
+if (data.pedidosPendentes) for (const [k, v] of Object.entries(data.pedidosPendentes)) db.pedidosPendentes.set(k, v);
 // KORTEX KEY SYSTEM — Carregar Keys Random (REGRA 9)
 if (data.keysRandom) for (const [k, v] of Object.entries(data.keysRandom)) db.keysRandom.set(k, v);
+if (data.groq_model) CONFIG.groq_model = data.groq_model;
 }
 if (fs.existsSync(CONFIG.historicoFile)) {
 const data = JSON.parse(fs.readFileSync(CONFIG.historicoFile, 'utf8'));
@@ -545,9 +676,8 @@ return sub ? NIVEIS_VIP[sub.nivel].boasvindas : false;
 hasStickerRights: async (sock, groupId, senderId) => {
 if (utils.isOwner(senderId)) return true;
 if (!utils.isGroupSubscribed(groupId)) return false;
-if (!(await utils.isSenderGroupAdmin(sock, groupId, senderId))) return false;
 const sub = utils.getGroupSubscription(groupId);
-return sub ? NIVEIS_VIP[sub.nivel].sticker : false;
+return sub ? !!NIVEIS_VIP[sub.nivel]?.sticker : false;
 },
 extractText: (msg) => {
 try {
@@ -560,8 +690,25 @@ if (listaId) return listaId;
 return msg.message?.conversation || msg.message?.extendedTextMessage?.text || msg.message?.imageMessage?.caption || msg.message?.videoMessage?.caption || msg.message?.documentMessage?.caption || "";
 } catch { return ""; }
 },
-getQuotedMention: (msg) => { try { return msg.message?.extendedTextMessage?.contextInfo?.mentionedJid?.[0]; } catch { return null; } },
-getMentions: (msg) => { try { return msg.message?.extendedTextMessage?.contextInfo?.mentionedJid || []; } catch { return []; } },
+getQuotedMention: (msg) => {
+try {
+const ctx = msg?.message?.extendedTextMessage?.contextInfo || msg?.message?.buttonsResponseMessage?.contextInfo || msg?.message?.listResponseMessage?.contextInfo || msg?.message?.templateButtonReplyMessage?.contextInfo || {};
+const mentioned = ctx.mentionedJid || [];
+if (mentioned.length) return mentioned[0];
+const participant = ctx.participant || ctx.remoteJid || msg?.key?.participant || msg?.participant;
+if (participant && participant !== msg?.key?.remoteJid && participant !== `${CONFIG.botNumber}@s.whatsapp.net`) return participant;
+return null;
+} catch { return null; }
+},
+getMentions: (msg) => {
+try {
+const ctx = msg?.message?.extendedTextMessage?.contextInfo || msg?.message?.buttonsResponseMessage?.contextInfo || msg?.message?.listResponseMessage?.contextInfo || msg?.message?.templateButtonReplyMessage?.contextInfo || {};
+const arr = [...(ctx.mentionedJid || [])];
+const participant = ctx.participant || ctx.remoteJid || msg?.key?.participant || msg?.participant;
+if (participant && !arr.includes(participant)) arr.push(participant);
+return arr;
+} catch { return []; }
+},
 mensagemSemVIP: () => `❌ *Acesso negado!*\n\nEste grupo não possui assinatura activa.\n\n📞 Contacte: ${CONFIG.creator} - ${CONFIG.ownerNumber}`,
 checkGroupExpired: async (sock, groupId) => {
 const sub = db.gruposVIP.get(groupId);
@@ -719,18 +866,45 @@ return resposta;
 } catch { return "❌ Erro ao processar. Tenta novamente."; }
 }
 
-async function gerarCartaoBoasVindas(sock, participant) {
+async function gerarCartaoBoasVindas(sock, participant, groupId = null) {
 try {
-const caminhoBanner = path.join(__dirname, 'data', 'banners', 'boas_vindas.png');
-if (!fs.existsSync(caminhoBanner)) return null;
-let base = fs.readFileSync(caminhoBanner);
+const grupoNome = groupId ? (await getMetadataCached(sock, groupId).catch(() => null))?.subject || 'Grupo' : 'Grupo';
+const nomeUsuario = participant.split('@')[0] || 'Usuário';
+const svg = `
+<svg width="1200" height="700" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0%" stop-color="#111827"/>
+      <stop offset="50%" stop-color="#1f2937"/>
+      <stop offset="100%" stop-color="#0f172a"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" x2="1" y1="0" y2="0">
+      <stop offset="0%" stop-color="#38bdf8"/>
+      <stop offset="100%" stop-color="#a78bfa"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="700" fill="url(#bg)"/>
+  <circle cx="980" cy="120" r="200" fill="#ffffff" opacity="0.06"/>
+  <circle cx="980" cy="620" r="220" fill="#34d399" opacity="0.08"/>
+  <rect x="70" y="70" width="400" height="560" rx="36" fill="rgba(15,23,42,0.68)" stroke="rgba(255,255,255,0.1)"/>
+  <text x="90" y="140" font-size="46" fill="#e2e8f0" font-family="Arial, sans-serif" font-weight="700">Bem-vindo(a)</text>
+  <text x="90" y="260" font-size="72" fill="#ffffff" font-family="Arial, sans-serif" font-weight="700">@${String(nomeUsuario).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</text>
+  <text x="90" y="340" font-size="34" fill="#a5f3fc" font-family="Arial, sans-serif">ao grupo</text>
+  <text x="90" y="430" font-size="52" fill="#fbbf24" font-family="Arial, sans-serif" font-weight="700">${String(grupoNome).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</text>
+  <text x="90" y="520" font-size="28" fill="#d1d5db" font-family="Arial, sans-serif">Kortex ⚡ • Proteção + VIP</text>
+  <rect x="90" y="560" width="200" height="10" rx="5" fill="url(#accent)"/>
+  <g transform="translate(750 120)">
+    <circle cx="120" cy="120" r="120" fill="rgba(255,255,255,0.1)"/>
+    <circle cx="120" cy="120" r="100" fill="#0f172a"/>
+  </g>
+</svg>`;
+let base = await sharp(Buffer.from(svg)).png().toBuffer();
 try {
 const ppUrl = await sock.profilePictureUrl(participant, 'image');
 if (ppUrl) {
 const resp = await axios.get(ppUrl, { responseType: 'arraybuffer', timeout: 5000 });
-const maskSvg = `<svg width="120" height="120"><circle cx="60" cy="60" r="60" fill="white"/></svg>`;
-const avatar = await sharp(Buffer.from(resp.data)).resize(120, 120, { fit: 'cover' }).composite([{ input: Buffer.from(maskSvg), blend: 'dest-in' }]).png().toBuffer();
-base = await sharp(base).composite([{ input: avatar, top: 180, left: 340 }]).png().toBuffer();
+const avatar = await sharp(Buffer.from(resp.data)).resize(200, 200, { fit: 'cover' }).composite([{ input: Buffer.from(`<svg width="200" height="200"><circle cx="100" cy="100" r="100" fill="white"/></svg>`), blend: 'dest-in' }]).png().toBuffer();
+base = await sharp(base).composite([{ input: avatar, top: 120, left: 740 }]).png().toBuffer();
 }
 } catch {}
 return base;
@@ -822,9 +996,207 @@ if (n === 'diamante' || n === 'diamond') return 'diamante';
 if (n === 'lenda' || n === 'legend') return 'lenda';
 return null;
 }
+function normalizarMetodoPagamento(str) {
+const t = String(str || '').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+const mapa = {
+'mpesa': 'm-pesa', 'm pessa': 'm-pesa', 'm-pesa': 'm-pesa', 'm_pesa': 'm-pesa',
+'vodacom': 'vodacom', 'vodacomm': 'vodacom', 'airtel': 'airtel', 'emola': 'emola', 'e-mola': 'emola',
+'banco': 'banco', 'transferencia': 'transferencia', 'transferência': 'transferencia', 'transfer': 'transferencia',
+'mbanking': 'm-banking', 'm banking': 'm-banking', 'm-banking': 'm-banking'
+};
+return mapa[t] || t.replace(/[^a-z0-9\-]/g, '').replace(/-+/g, '-');
+}
+function limparNumeroTelefone(valor) {
+const text = String(valor || '').replace(/[^0-9]/g, '');
+return text.length >= 8 ? text : '';
+}
+function extrairNumeroRecebimento(texto) {
+const t = String(texto || '');
+const linhas = t.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+for (let i = linhas.length - 1; i >= 0; i--) {
+const match = linhas[i].match(/(?:\b|[^0-9])((?:\+?258|0)?[0-9]{8,15})(?:\b|[^0-9])/);
+if (match) return limparNumeroTelefone(match[1]);
+}
+const m = t.match(/(?:\b|[^0-9])((?:\+?258|0)?[0-9]{8,15})(?:\b|[^0-9])/);
+return m ? limparNumeroTelefone(m[1]) : '';
+}
+function extrairValorPagamento(texto) {
+const t = String(texto || '');
+const padroes = [
+/valor[^0-9]{0,12}([0-9]+(?:[.,][0-9]{1,2})?)/i,
+/(?:montante|total|amount)[^0-9]{0,12}([0-9]+(?:[.,][0-9]{1,2})?)/i,
+/([0-9]+(?:[.,][0-9]{1,2})?)\s*(?:mt|mzn|meticais|usd|eur)/i,
+/([0-9]+(?:[.,][0-9]{1,2})?)\s*(?:kz|usd|eur)/i
+];
+for (const padrao of padroes) {
+const match = t.match(padrao);
+if (match) return match[1].replace(',', '.');
+}
+return '';
+}
+function extrairReferenciaPagamento(texto) {
+const t = String(texto || '');
+const padroes = [
+/(?:ref(?:erencia|erência)?|referencia|referência)[^a-z0-9]{0,8}([A-Za-z0-9]{3,20})/i,
+/(?:txn|transacao|transação)[^a-z0-9]{0,8}([A-Za-z0-9]{3,20})/i
+];
+for (const padrao of padroes) {
+const match = t.match(padrao);
+if (match) return match[1].toUpperCase();
+}
+return '';
+}
+function extrairPedidoPagamento(texto) {
+const t = String(texto || '');
+const padroes = [
+/(?:pedido|ordem|order|n[ºº]\s*pedido|pedido\s*#?)[^a-z0-9]{0,8}([A-Za-z0-9-]{2,20})/i,
+/(?:#)([A-Za-z0-9-]{2,20})/i
+];
+for (const padrao of padroes) {
+const match = t.match(padrao);
+if (match) return match[1].toUpperCase();
+}
+return '';
+}
+function extrairMetodoPagamentoTexto(texto, tabelas) {
+const t = String(texto || '').toLowerCase();
+for (const item of tabelas) {
+const nomes = [item.metodo, item.nomeMetodo, item.descricao || ''];
+for (const nome of nomes) {
+if (!nome) continue;
+const n = String(nome).toLowerCase();
+if (n && (t.includes(n) || t.includes(normalizarMetodoPagamento(n)))) return item.metodo || item.nomeMetodo || 'pagamento';
+}
+}
+if (/(m[- ]?pesa|mpesa|m pessa)/i.test(t)) return 'm-pesa';
+if (/vodacom/i.test(t)) return 'vodacom';
+if (/airtel/i.test(t)) return 'airtel';
+if (/emola|e[- ]mola/i.test(t)) return 'emola';
+if (/banco|bank/i.test(t)) return 'banco';
+if (/transferencia|transferência|transfer/i.test(t)) return 'transferencia';
+return '';
+}
+function pegarTabelasPagamento(chatId) {
+const local = db.tabelasPagamento.get(chatId) || [];
+const globalList = db.tabelasPagamento.get('global') || [];
+return [...globalList, ...local];
+}
+function inferirPedidoPagamento(texto, senderId, chatId) {
+const t = String(texto || '');
+if (!t.trim()) return null;
+const chave = /transfer(?:e|ê)ncia|pagamento|comprovativo|comprovante|valor|referencia|referência|pedido|montante|recebimento/i.test(t);
+if (!chave && !/\b(?:m-pesa|vodacom|airtel|emola|banco)\b/i.test(t)) return null;
+const numeroRecebimento = extrairNumeroRecebimento(t);
+const tabelas = pegarTabelasPagamento(chatId);
+const metodo = extrairMetodoPagamentoTexto(t, tabelas) || (numeroRecebimento ? 'numero' : '');
+const valor = extrairValorPagamento(t);
+const referencia = extrairReferenciaPagamento(t);
+const pedido = extrairPedidoPagamento(t);
+if (!valor && !referencia && !pedido && !numeroRecebimento) return null;
+return {
+texto: t,
+valor,
+referencia,
+pedido,
+numeroRecebimento,
+metodo,
+cliente: senderId,
+chatId
+};
+}
+function formatarPedidoMensagem(pedido) {
+const cliente = pedido.cliente ? `@${pedido.cliente.split('@')[0]}` : '—';
+const numero = pedido.numeroRecebimento ? pedido.numeroRecebimento : 'Não informado';
+const valor = pedido.valor || '—';
+const referencia = pedido.referencia || '—';
+const pedidoId = pedido.pedido || '—';
+const metodo = pedido.metodo || '—';
+return `╔══════════════════════╗\n║   🧾 NOVO PAGAMENTO  ║\n╠══════════════════════╣\n║ 👤 Cliente: ${cliente.padEnd(15, ' ')}║\n║ 💰 Valor: ${String(valor).padEnd(15, ' ')}║\n║ 🔖 Referência: ${String(referencia).padEnd(15, ' ')}║\n║ 🧾 Pedido: ${String(pedidoId).padEnd(15, ' ')}║\n║ 📱 Recebimento: ${(String(numero)).padEnd(15, ' ')}║\n║ 💳 Método: ${String(metodo).padEnd(15, ' ')}║\n╠══════════════════════╣\n║ ⏳ AGUARDANDO ANÁLISE ║\n╚══════════════════════╝`;
+}
+async function enviarPedidoPagamentoADM(sock, pedido, origemChatId) {
+const destinatarios = new Set();
+if (origemChatId?.endsWith('@g.us')) {
+try {
+const meta = await sock.groupMetadata(origemChatId);
+for (const p of meta.participants || []) {
+if (p.admin || p.id === `${CONFIG.ownerNumber}@s.whatsapp.net`) destinatarios.add(p.id);
+}
+} catch {}
+}
+destinatarios.add(`${CONFIG.ownerNumber}@s.whatsapp.net`);
+for (const destino of destinatarios) {
+try {
+await sock.sendMessage(destino, { text: formatarPedidoMensagem(pedido), mentions: [pedido.cliente] });
+} catch {}
+}
+}
+async function processarPedidoPagamento(sock, msg, dados) {
+const senderId = msg.key.participant || msg.key.remoteJid;
+const chatId = msg.key.remoteJid;
+const finalPedido = {
+...dados,
+cliente: senderId,
+chatId,
+id: `PG-${Date.now().toString().slice(-6)}`,
+status: 'aguardando_analise',
+criadoEm: Date.now(),
+observacao: 'Pedido detectado automaticamente pela mensagem de comprovativo.'
+};
+if (!finalPedido.numeroRecebimento) {
+const pendente = db.pedidosPendentes.get(senderId) || finalPedido;
+pendente.status = 'aguardando_numero';
+pendente.chatId = chatId;
+pendente.cliente = senderId;
+pendente.textoOriginal = dados.texto;
+pendente.valor = pendente.valor || finalPedido.valor;
+pendente.referencia = pendente.referencia || finalPedido.referencia;
+pendente.pedido = pendente.pedido || finalPedido.pedido;
+pendente.metodo = pendente.metodo || finalPedido.metodo;
+if (!pendente.id) pendente.id = finalPedido.id;
+db.pedidosPendentes.set(senderId, pendente);
+await sock.sendMessage(chatId, { text: `🧾 *PAGAMENTO DETECTADO*\n\n✅ Encontrei os dados principais, mas falta o número que vai receber o pagamento.\n\nEnvie apenas o número no final da mensagem para completar o pedido.`, mentions: [senderId] });
+return true;
+}
+finalPedido.numeroRecebimento = limparNumeroTelefone(finalPedido.numeroRecebimento);
+db.pedidosPagamento.set(finalPedido.id, finalPedido);
+db.pedidosPendentes.delete(senderId);
+await enviarPedidoPagamentoADM(sock, finalPedido, chatId);
+await sock.sendMessage(chatId, { text: `✅ *PEDIDO REGISTADO*\n\nO comprovativo foi enviado para a análise dos ADM.`, mentions: [senderId] });
+return true;
+}
+async function atualizarPedidoNumeroRecebimento(sock, senderId, numero) {
+const pendente = db.pedidosPendentes.get(senderId);
+if (!pendente) return false;
+pendente.numeroRecebimento = limparNumeroTelefone(numero);
+pendente.status = 'aguardando_analise';
+db.pedidosPagamento.set(pendente.id, pendente);
+db.pedidosPendentes.delete(senderId);
+await enviarPedidoPagamentoADM(sock, pendente, pendente.chatId);
+await sock.sendMessage(pendente.chatId, { text: `✅ *NÚMERO ATUALIZADO*\n\nO pedido foi atualizado e enviado para análise dos ADM.`, mentions: [senderId] });
+return true;
+}
 function obterNomeNivel(nivel) {
 const nomes = { ouro: 'OURO 🥇', diamante: 'DIAMANTE 💎', lenda: 'LENDA 👑' };
 return nomes[nivel] || String(nivel).toUpperCase();
+}
+async function podeGerenciarModoInternet(sock, chatId, senderId) {
+if (utils.isOwner(senderId)) return true;
+if (!chatId || !chatId.endsWith('@g.us')) return false;
+if (!(await utils.isSenderGroupAdmin(sock, chatId, senderId))) return false;
+const sub = db.gruposVIP.get(chatId);
+return !!(sub && sub.nivel === 'diamante' && sub.expiraEm > Date.now());
+}
+function isModoInternetAtivo(chatId) {
+return !!(chatId && db.modoInternet.get(chatId));
+}
+function verificarVIPDiamanteParaModoInternet(senderId, chatId) {
+if (utils.isOwner(senderId)) return true;
+if (chatId && chatId.endsWith('@g.us')) {
+const sub = db.gruposVIP.get(chatId);
+return !!(sub && sub.nivel === 'diamante' && sub.expiraEm > Date.now());
+}
+const vip = db.usersVIP.get(senderId);
+return !!(vip && vip.nivel === 'diamante' && vip.expiraEm > Date.now());
 }
 async function enviarAlertaSegurancaDono(sock, userId, nivel, tipo, keyUsada, alertaId) {
 const donoId = `${CONFIG.ownerNumber}@s.whatsapp.net`;
@@ -1004,7 +1376,7 @@ isOwner, isGroupAdmin, vip, sub, nivelNome: vip ? vip.nome : null,
 pAdmin: isOwner || (isGroupAdmin && !!vip?.admin), pBan: isOwner || (isGroupAdmin && !!vip?.ban),
 pPromote: isOwner || (isGroupAdmin && !!vip?.promote), pAnti: isOwner || (isGroupAdmin && !!vip?.anti),
 pRules: isOwner || (isGroupAdmin && !!vip?.rules), pBemv: isOwner || (isGroupAdmin && !!vip?.boasvindas),
-pSticker: isOwner || (isGroupAdmin && !!vip?.sticker)
+pSticker: isOwner || (!!vip?.sticker)
 };
 },
 'menubtn': async (sock, ctx) => { await commands['menu'](sock, ctx); },
@@ -2040,13 +2412,21 @@ if (i === 0) await sock.sendMessage(ctx.chatId, { text: '❌ Não consegui baixa
 'revelar': async (sock, ctx) => {
 if (ctx.isGroup && !(await utils.hasGroupAdminRights(sock, ctx.chatId, ctx.senderId))) return;
 if (!ctx.isGroup && !utils.isOwner(ctx.senderId)) return;
-const quoted = ctx.msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
-const viewOnce = quoted?.viewOnceMessage?.message || quoted?.viewOnceMessageV2?.message || quoted?.viewOnceMessageV2Extension?.message;
+const ctxInfo = ctx.msg.message?.extendedTextMessage?.contextInfo || ctx.msg.message?.viewOnceMessage?.message?.extendedTextMessage?.contextInfo || {};
+const quoted = ctxInfo.quotedMessage || ctx.msg.message?.viewOnceMessage?.message || ctx.msg.message?.viewOnceMessageV2?.message || ctx.msg.message?.viewOnceMessageV2Extension?.message || null;
+const viewOnce = quoted?.viewOnceMessage?.message || quoted?.viewOnceMessageV2?.message || quoted?.viewOnceMessageV2Extension?.message || quoted?.imageMessage || quoted?.videoMessage || quoted?.audioMessage;
 if (!viewOnce) return sock.sendMessage(ctx.chatId, { text: '👻 Responde a uma mensagem "visualização única" com .revelar' });
 try {
 if (viewOnce.imageMessage) { const buf = await downloadMediaMessage({ message: viewOnce }, 'buffer', {}); return await sock.sendMessage(ctx.chatId, { image: buf, caption: viewOnce.imageMessage.caption || '👻 Revelada' }); }
 if (viewOnce.videoMessage) { const buf = await downloadMediaMessage({ message: viewOnce }, 'buffer', {}); return await sock.sendMessage(ctx.chatId, { video: buf, caption: viewOnce.videoMessage.caption || '👻 Revelada', mimetype: 'video/mp4' }); }
 if (viewOnce.audioMessage) { const buf = await downloadMediaMessage({ message: viewOnce }, 'buffer', {}); return await sock.sendMessage(ctx.chatId, { audio: buf, mimetype: 'audio/mpeg', ptt: viewOnce.audioMessage.ptt || false }); }
+const direct = quoted?.viewOnceMessage?.message || quoted?.viewOnceMessageV2?.message || quoted?.viewOnceMessageV2Extension?.message;
+if (direct?.imageMessage || direct?.videoMessage || direct?.audioMessage) {
+  const buf = await downloadMediaMessage({ message: direct }, 'buffer', {});
+  if (direct.imageMessage) return await sock.sendMessage(ctx.chatId, { image: buf, caption: direct.imageMessage.caption || '👻 Revelada' });
+  if (direct.videoMessage) return await sock.sendMessage(ctx.chatId, { video: buf, caption: direct.videoMessage.caption || '👻 Revelada', mimetype: 'video/mp4' });
+  if (direct.audioMessage) return await sock.sendMessage(ctx.chatId, { audio: buf, mimetype: 'audio/mpeg', ptt: direct.audioMessage.ptt || false });
+}
 await sock.sendMessage(ctx.chatId, { text: '❌ Tipo de mensagem não suportado.' });
 } catch (e) { console.warn('revelar:', e.message); await sock.sendMessage(ctx.chatId, { text: '❌ Não consegui revelar esta mensagem.' }); }
 },
@@ -2119,7 +2499,6 @@ await enviarMenuKortex(sock, ctx, { titulo: '🎨 MÓDULO STICKERS', conteudo, i
 },
 'figurinha': async (sock, ctx) => {
 if (ctx.isGroup && !(await utils.hasStickerRights(sock, ctx.chatId, ctx.senderId))) return sock.sendMessage(ctx.chatId, { text: utils.mensagemSemVIP() });
-if (!ctx.isGroup && !utils.isOwner(ctx.senderId)) return;
 let buffer = null, processado = null;
 try {
 const msg = ctx.msg;
@@ -2127,7 +2506,10 @@ const quotedMsg = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
 const mediaMsg = quotedMsg ? { message: quotedMsg } : msg;
 if (mediaMsg.message?.imageMessage) {
 buffer = await downloadMediaMessage(mediaMsg, 'buffer', {});
-processado = await sharp(buffer).resize(512, 512, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } }).webp({ quality: 85, effort: 4 }).toBuffer();
+processado = await sharp(buffer)
+.resize(512, 512, { fit: 'cover', kernel: 'lanczos3', withoutEnlargement: true })
+.webp({ quality: 85, effort: 4 })
+.toBuffer();
 buffer = null;
 } else if (mediaMsg.message?.videoMessage) {
 const segundos = mediaMsg.message.videoMessage.seconds || 0;
@@ -2147,7 +2529,6 @@ finally { buffer = null; processado = null; }
 },
 'stickertexto': async (sock, ctx) => {
 if (ctx.isGroup && !(await utils.hasStickerRights(sock, ctx.chatId, ctx.senderId))) return sock.sendMessage(ctx.chatId, { text: utils.mensagemSemVIP() });
-if (!ctx.isGroup && !utils.isOwner(ctx.senderId)) return;
 const texto = ctx.args.join(' ');
 if (!texto) return sock.sendMessage(ctx.chatId, { text: 'Uso: .stickertexto [texto]' });
 try {
@@ -2477,6 +2858,91 @@ if (a === 'on') { db.grupos.semPrefixo.add(ctx.chatId); salvarDados(); return so
 if (a === 'off') { db.grupos.semPrefixo.delete(ctx.chatId); salvarDados(); return sock.sendMessage(ctx.chatId, { text: '⚡ Sem prefixo desativado.' }); }
 await sock.sendMessage(ctx.chatId, { text: `Sem prefixo: ${db.grupos.semPrefixo.has(ctx.chatId) ? '✅ ON' : '❌ OFF'}\nUso: .semprefixo on/off` });
 },
+'modointernet': async (sock, ctx) => {
+if (!ctx.isGroup) return sock.sendMessage(ctx.chatId, { text: '⚡ Este modo é apenas para grupos.' });
+if (!utils.isOwner(ctx.senderId) && !(await utils.isSenderGroupAdmin(sock, ctx.chatId, ctx.senderId))) throw new PermissaoNegada();
+const arg = (ctx.args[0] || '').toLowerCase();
+if (!arg) {
+return sock.sendMessage(ctx.chatId, { text: `⚡ *MODO INTERNET*\n\nStatus: ${isModoInternetAtivo(ctx.chatId) ? '✅ ACTIVADO' : '❌ DESATIVADO'}\n\nUso: .modointernet on/off` });
+}
+const ativo = ['on','ativar','ativo','true','1','yes'].includes(arg);
+const permitido = verificarVIPDiamanteParaModoInternet(ctx.senderId, ctx.chatId);
+if (!permitido) {
+return sock.sendMessage(ctx.chatId, { text: '💎 *MODO INTERNET*\n\n🚫 Só está disponível para VIP Diamante.' });
+}
+db.modoInternet.set(ctx.chatId, ativo);
+salvarDados();
+await sock.sendMessage(ctx.chatId, { text: `⚡ *MODO INTERNET*\n\n${ativo ? '✅ ACTIVADO' : '❌ DESATIVADO'}\n\n💎 Requer VIP Diamante.
+👮 Apenas administradores podem continuar a operar.` });
+},
+'tabelapagamento': async (sock, ctx) => {
+if (!ctx.isGroup) return sock.sendMessage(ctx.chatId, { text: '⚡ A tabela deve ser configurada no grupo.' });
+if (!utils.isOwner(ctx.senderId) && !(await utils.isSenderGroupAdmin(sock, ctx.chatId, ctx.senderId))) throw new PermissaoNegada();
+const action = (ctx.args[0] || '').toLowerCase();
+const atual = db.tabelasPagamento.get(ctx.chatId) || [];
+if (!action || action === 'listar' || action === 'list') {
+if (!atual.length) return sock.sendMessage(ctx.chatId, { text: '🧾 Nenhuma tabela registada.' });
+let texto = '🧾 *TABELAS DE PAGAMENTO*\n\n';
+for (const item of atual) {
+texto += `• ${item.nomeMetodo || item.metodo || 'Método'} → ${item.numeroConta || item.conta || '—'}\n${item.descricao || ''}\n\n`;
+}
+return sock.sendMessage(ctx.chatId, { text: texto });
+}
+if (action === 'add' || action === 'adicionar' || action === 'novo') {
+const metodo = ctx.args[1] || '';
+const nomeMetodo = ctx.args[2] || metodo;
+const numeroConta = ctx.args[3] || '';
+const descricao = ctx.args.slice(4).join(' ') || `Pagamento via ${nomeMetodo}`;
+if (!metodo || !numeroConta) {
+return sock.sendMessage(ctx.chatId, { text: 'Uso: .tabelapagamento add [metodo] [nome] [numero] [descricao]\nEx: .tabelapagamento add m-pesa M-Pesa 841234567 Recebe via M-Pesa' });
+}
+const item = { id: Date.now().toString(), metodo: normalizarMetodoPagamento(metodo), nomeMetodo, numeroConta, conta: numeroConta, descricao, ativo: true };
+atual.push(item); db.tabelasPagamento.set(ctx.chatId, atual); salvarDados();
+return sock.sendMessage(ctx.chatId, { text: `✅ *TABELA ADICIONADA*\n\n🧾 ${item.nomeMetodo}\n📱 ${item.numeroConta}\n💳 ${item.metodo}\n📝 ${item.descricao}` });
+}
+if (action === 'remove' || action === 'remover') {
+const alvo = ctx.args[1];
+if (!alvo) return sock.sendMessage(ctx.chatId, { text: 'Uso: .tabelapagamento remove [id]' });
+const idx = atual.findIndex(x => x.id === alvo || x.numeroConta === alvo || x.metodo === normalizarMetodoPagamento(alvo));
+if (idx === -1) return sock.sendMessage(ctx.chatId, { text: '❌ Tabela não encontrada.' });
+atual.splice(idx, 1); db.tabelasPagamento.set(ctx.chatId, atual); salvarDados();
+return sock.sendMessage(ctx.chatId, { text: '✅ Tabela removida.' });
+}
+return sock.sendMessage(ctx.chatId, { text: 'Uso: .tabelapagamento listar | add | remove' });
+},
+'pedidos': async (sock, ctx) => {
+if (!ctx.isGroup) return sock.sendMessage(ctx.chatId, { text: '⚡ Este controlo é do grupo.' });
+if (!utils.isOwner(ctx.senderId) && !(await utils.isSenderGroupAdmin(sock, ctx.chatId, ctx.senderId))) throw new PermissaoNegada();
+const lista = [...db.pedidosPagamento.values()].filter(p => p.chatId === ctx.chatId || !p.chatId);
+if (!lista.length) return sock.sendMessage(ctx.chatId, { text: '🧾 Nenhum pedido em análise.' });
+let texto = '🧾 *PEDIDOS DE PAGAMENTO*\n\n';
+for (const pedido of lista) {
+texto += `#${pedido.id} | ${pedido.cliente ? '@' + pedido.cliente.split('@')[0] : '—'}\n💰 ${pedido.valor || '—'}\n🔖 ${pedido.referencia || '—'}\n📱 ${pedido.numeroRecebimento || 'Não informado'}\n⏳ ${pedido.status || 'aguardando_analise'}\n\n`;
+}
+await sock.sendMessage(ctx.chatId, { text: texto });
+},
+'receberpedido': async (sock, ctx) => {
+if (!ctx.isGroup) return sock.sendMessage(ctx.chatId, { text: '⚡ Este controlo é do grupo.' });
+if (!utils.isOwner(ctx.senderId) && !(await utils.isSenderGroupAdmin(sock, ctx.chatId, ctx.senderId))) throw new PermissaoNegada();
+const id = ctx.args[0];
+if (!id) return sock.sendMessage(ctx.chatId, { text: 'Uso: .receberpedido [id]' });
+const pedido = [...db.pedidosPagamento.values()].find(p => p.id === id || p.id?.includes(id));
+if (!pedido) return sock.sendMessage(ctx.chatId, { text: `❌ Pedido ${id} não encontrado.` });
+pedido.status = 'recebido';
+await sock.sendMessage(ctx.chatId, { text: `✅ *PAGAMENTO RECEBIDO*\n\n🧾 Pedido: ${pedido.id}\n👤 Cliente: @${pedido.cliente?.split('@')[0] || '—'}\n💰 Valor: ${pedido.valor || '—'}` });
+return sock.sendMessage(`${CONFIG.ownerNumber}@s.whatsapp.net`, { text: `✅ *RECEBIDO*\n\nPedido: ${pedido.id}\nCliente: @${pedido.cliente?.split('@')[0] || '—'}` });
+},
+'rejeitarpedido': async (sock, ctx) => {
+if (!ctx.isGroup) return sock.sendMessage(ctx.chatId, { text: '⚡ Este controlo é do grupo.' });
+if (!utils.isOwner(ctx.senderId) && !(await utils.isSenderGroupAdmin(sock, ctx.chatId, ctx.senderId))) throw new PermissaoNegada();
+const id = ctx.args[0];
+if (!id) return sock.sendMessage(ctx.chatId, { text: 'Uso: .rejeitarpedido [id]' });
+const pedido = [...db.pedidosPagamento.values()].find(p => p.id === id || p.id?.includes(id));
+if (!pedido) return sock.sendMessage(ctx.chatId, { text: `❌ Pedido ${id} não encontrado.` });
+pedido.status = 'nao_recebido';
+await sock.sendMessage(ctx.chatId, { text: `❌ *PAGAMENTO NÃO RECEBIDO*\n\n🧾 Pedido: ${pedido.id}\n👤 Cliente: @${pedido.cliente?.split('@')[0] || '—'}` });
+return sock.sendMessage(`${CONFIG.ownerNumber}@s.whatsapp.net`, { text: `❌ *NÃO RECEBIDO*\n\nPedido: ${pedido.id}\nCliente: @${pedido.cliente?.split('@')[0] || '—'}` });
+},
 
 // ══════════════════════════════════════════════════════════
 // KORTEX KEY SYSTEM — COMANDOS (REGRA 7, 13, 14, 15)
@@ -2721,6 +3187,31 @@ setTimeout(async () => { try { await sock.sendMessage(chatId, { delete: msg.key 
 } catch {}
 if (isGroup) await utils.checkGroupExpired(sock, chatId);
 
+const pedidoDetectado = inferirPedidoPagamento(fullText, senderId, chatId);
+if (pedidoDetectado && !msg.key.fromMe) {
+const pendente = db.pedidosPendentes.get(senderId);
+const numeroPresente = pedidoDetectado.numeroRecebimento || (pendente && pendente.numeroRecebimento);
+if (!pendente || !pendente.numeroRecebimento) {
+if (numeroPresente) {
+const atual = { ...pedidoDetectado, numeroRecebimento: numeroPresente, cliente: senderId, chatId, status: 'aguardando_analise' };
+if (pendente) Object.assign(pendente, atual); else db.pedidosPendentes.set(senderId, atual);
+if (!db.pedidosPagamento.has(`PG-${Date.now().toString().slice(-6)}`)) {
+const atualId = pendente?.id || `PG-${Date.now().toString().slice(-6)}`;
+const finalPedido = { ...atual, id: atualId, status: 'aguardando_analise' };
+if (!finalPedido.numeroRecebimento) finalPedido.numeroRecebimento = numeroPresente;
+db.pedidosPagamento.set(finalPedido.id, finalPedido);
+db.pedidosPendentes.delete(senderId);
+await enviarPedidoPagamentoADM(sock, finalPedido, chatId);
+return;
+}
+}
+if (!db.pedidosPendentes.has(senderId) || !db.pedidosPendentes.get(senderId).numeroRecebimento) {
+await processarPedidoPagamento(sock, msg, pedidoDetectado);
+return;
+}
+}
+}
+
 // ══════════════════════════════════════════════════════════
 // KORTEX KEY SYSTEM — HANDLER DE FLUXOS
 // ══════════════════════════════════════════════════════════
@@ -2948,6 +3439,60 @@ try { const u = new URL(link.startsWith('http') ? link : 'http://' + link); if (
 if (!ignore) { await executarAntiLink(sock, chatId, msg, senderId, antiLinkMode); return; }
 }
 }
+const mediaKeys = ['imageMessage', 'videoMessage', 'documentMessage', 'stickerMessage'];
+const ehMidia = !!mediaKeys.find(key => !!msg.message?.[key]);
+if (ehMidia) {
+const mediaSpam = db.mediaSpamMonitor.get(chatId) || new Map();
+const infoMedia = mediaSpam.get(senderId) || { count: 0, first: Date.now(), last: Date.now() };
+const agoraMedia = Date.now();
+if (agoraMedia - infoMedia.first > 10000) {
+infoMedia.count = 0;
+infoMedia.first = agoraMedia;
+}
+infoMedia.count += 1;
+infoMedia.last = agoraMedia;
+mediaSpam.set(senderId, infoMedia);
+db.mediaSpamMonitor.set(chatId, mediaSpam);
+if (infoMedia.count >= 3) {
+try { await sock.sendMessage(chatId, { delete: msg.key }); } catch {}
+if (!db.warns.has(chatId)) db.warns.set(chatId, new Map());
+const warnAtual = db.warns.get(chatId).get(senderId) || 0;
+const warnNovo = warnAtual + 1;
+db.warns.get(chatId).set(senderId, warnNovo);
+salvarDados();
+await sock.sendMessage(chatId, { text: `⚠️ *FALTA DE MÍDIA EM MASSA*\n@${senderId.split('@')[0]}\nVárias imagens/vídeos/documentos em < 10s.\nAdvertência: ${warnNovo}/3`, mentions: [senderId] });
+if (warnNovo >= 3) {
+try { await sock.groupParticipantsUpdate(chatId, [senderId], 'remove'); } catch {}
+try { await sock.sendMessage(chatId, { text: `🚫 @${senderId.split('@')[0]} foi removido por envio em massa de mídia.`, mentions: [senderId] }); } catch {}
+}
+return;
+}
+}
+const spam = db.spamMonitor.get(chatId) || new Map();
+const infoSpam = spam.get(senderId) || { count: 0, first: Date.now(), last: Date.now() };
+const agoraSpam = Date.now();
+if (agoraSpam - infoSpam.first > 5000) {
+infoSpam.count = 0;
+infoSpam.first = agoraSpam;
+}
+infoSpam.count += 1;
+infoSpam.last = agoraSpam;
+spam.set(senderId, infoSpam);
+db.spamMonitor.set(chatId, spam);
+if (infoSpam.count >= 3) {
+try { await sock.sendMessage(chatId, { delete: msg.key }); } catch {}
+if (!db.warns.has(chatId)) db.warns.set(chatId, new Map());
+const warnAtual = db.warns.get(chatId).get(senderId) || 0;
+const warnNovo = warnAtual + 1;
+db.warns.get(chatId).set(senderId, warnNovo);
+salvarDados();
+await sock.sendMessage(chatId, { text: `⚠️ *FLOOD/SPAM DETECTADO*\n@${senderId.split('@')[0]}\nMensagens em massa em < 5s.\nAdvertência: ${warnNovo}/3`, mentions: [senderId] });
+if (warnNovo >= 3) {
+try { await sock.groupParticipantsUpdate(chatId, [senderId], 'remove'); } catch {}
+try { await sock.sendMessage(chatId, { text: `🚫 @${senderId.split('@')[0]} foi removido por excesso de spam.`, mentions: [senderId] }); } catch {}
+}
+return;
+}
 const palavrasBanidas = db.grupos.palavrasBanidas.get(chatId) || [];
 for (const palavra of palavrasBanidas) {
 if (fullText.toLowerCase().includes(palavra)) {
@@ -3115,10 +3660,6 @@ return;
 }
 }
 if (utils.isOwner(senderId) && pareceIntentoRelatorio(fullText)) { await enviarRelatorioCompleto(sock, chatId); return; }
-if (pareceNomeCanalCandidato(fullText)) {
-const canal = await pesquisarCanalPorNome(fullText.trim());
-if (canal) { await enviarCartaoCanal(sock, chatId, canal); return; }
-}
 const resposta = await askGroq(chatId, fullText, utils.isOwner(senderId), false);
 if (resposta) await sock.sendMessage(chatId, { text: `⚡ ${resposta}` });
 return;
@@ -3233,7 +3774,7 @@ for (const participant of participants) {
 if (participant !== botJid) {
 const nome = `@${participant.split('@')[0]}`;
 const textoFinal = boasVindasMsg.replace(/@nome/g, nome).replace(/@grupo/g, metadata.subject);
-const cartao = await gerarCartaoBoasVindas(sock, participant);
+const cartao = await gerarCartaoBoasVindas(sock, participant, groupId);
 if (cartao) await sock.sendMessage(groupId, { image: cartao, caption: textoFinal, mentions: [participant] });
 else await sock.sendMessage(groupId, { text: textoFinal, mentions: [participant] });
 }
@@ -3283,8 +3824,38 @@ setTimeout(startBot, delay);
 }
 }
 
-console.log(`🚀 Iniciando ${CONFIG.botName}...`);
-console.log(`👤 Criado por: ${CONFIG.creator}`);
-startBot().catch(console.error);
+async function iniciarKortexComFirebase() {
+  console.log('🚀 Iniciando ' + CONFIG.botName + '...');
+  console.log('👤 Criado por: ' + CONFIG.creator);
 
-module.exports = { CONFIG, db, commands, utils, startBot };
+  try {
+    if (fb) {
+      const backup = await fb.Backup.carregarTudo();
+      if (backup && Object.keys(backup).length > 0) {
+        let usarFirebase = true;
+        try {
+          if (fs.existsSync(CONFIG.dataFile) && backup.atualizadoEm) {
+            const horaLocal = fs.statSync(CONFIG.dataFile).mtimeMs;
+            if (backup.atualizadoEm < horaLocal) usarFirebase = false;
+          }
+        } catch {}
+
+        if (usarFirebase) {
+          const restaurado = aplicarBackupFirebase(backup);
+          if (restaurado) console.log('☁️ Backup Firebase restaurado com sucesso');
+          else console.warn('⚠️ Backup Firebase inválido ou não foi aplicado');
+        } else {
+          console.log('💾 Arquivo local mais recente; Firebase ignorado');
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('⚠️ Falha ao restaurar Firebase:', e.message);
+  }
+
+  await startBot();
+}
+
+iniciarKortexComFirebase().catch(console.error);
+
+module.exports = { CONFIG, db, commands, utils, startBot, iniciarKortexComFirebase };
