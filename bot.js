@@ -214,6 +214,10 @@ if (!r.data || r.data.length === 0 || r.data.length > maxBytes) return null;
 return Buffer.from(r.data);
 }
 function extrairVideoId(link) { const m = link.match(/(?:youtu\.be\/|v=|shorts\/|embed\/)([A-Za-z0-9_-]{11})/); return m ? m[1] : null; }
+function extrairNomeConta(dados) {
+const nome = dados?.author || dados?.channel || dados?.uploader || dados?.owner || dados?.account || dados?.username || dados?.creator || '—';
+return String(nome).replace(/^@/, '').trim() || '—';
+}
 
 // ══════════════════════════════════════════════════════════
 // BUSCA RÁPIDA DE CANAL POR NOME (PV)
@@ -370,7 +374,7 @@ const SEM_PREFIXO_SEGUROS = new Set(['menu','menubtn','ajuda','comandos','cgeral
 const COMANDOS_SENSIVEIS = new Set([
 'banir','promover','rebaixar','fechar','abrir','apagar',
 'antilink','proibirpalavra','desbanirpalavra','regras','boasvindas',
-'ativarvip','removervip','desativarcomando','ativarcomando',
+'ativarvip','removervip','removervipuser','desativarcomando','ativarcomando',
 'ignorar','designorar','desligarbot','ligarbot',
 'nome','foto','criargrupo','silenciar','dessilenciar',
 'advertir','removeradvertencia','antimidia','autodelete',
@@ -388,7 +392,7 @@ ping: '🏓', hora: '🕒', info: '⚡', planos: '💰', statusgrupo: '💎', co
 banir: '🔨', promover: '⬆️', rebaixar: '⬇️', marcartodos: '📢', historico: '📜', fechar: '🔒', abrir: '🔓', link: '🔗', idgrupo: '🆔', apagar: '🗑️',
 antilink: '🔗', proibirpalavra: '📵', desbanirpalavra: '✅', regras: '📜', ia: '🧠', autodelete: '🤖', verregras: '📃', listarpalavras: '📃', boasvindas: '👋',
 figurinha: '🎨', stickertexto: '✏️', infosticker: 'ℹ️', modelo: '🖼️', traduzir: '🌍', recibo: '🧾',
-ativarvip: '💎', removervip: '🚫', listargrupos: '📋', avisartodos: '📣', atalho: '⚡', removeratalho: '🗑️', listaratalhos: '⚡',
+ativarvip: '💎', removervip: '🚫', removervipuser: '🚫', listargrupos: '📋', avisartodos: '📣', atalho: '⚡', removeratalho: '🗑️', listaratalhos: '⚡',
 estatisticas: '📊', relatorio: '📊', prefixo: '⚙️', backup: '💾', restaurar: '♻️', desligarbot: '🔴', ligarbot: '🟢',
 ignorar: '🔇', designorar: '🔊', ignorados: '🔇', notificar: '🔔', usocomandos: '📊',
 tiktok: '🎵', instagram: '📸', youtube: '🎬', youtubeaudio: '🎵', youtubevideo: '🎥', baixar: '🌐', facebook: '📘',
@@ -978,6 +982,48 @@ await sock.sendMessage(ctx.chatId, { text: legenda, mentions: [ctx.senderId] });
 }
 }
 
+async function enviarMenuInterativo(sock, ctx) {
+const p = await commands._getPerms(sock, ctx);
+const nomeUsuario = ctx.senderId ? ctx.senderId.split('@')[0] : 'usuário';
+const nomeBot = CONFIG.botName || 'Kortex';
+const rows = [
+{ title: '🌐 Geral', description: 'Comandos básicos e informações', rowId: 'menu_geral' },
+{ title: '🧰 Utilitários', description: 'Cálculos, geradores e conversões', rowId: 'menu_util' },
+{ title: '🔤 Texto', description: 'Manipulação de texto e palavras', rowId: 'menu_texto' },
+{ title: '🌍 Informação', description: 'Consultas, notícias e entretenimento', rowId: 'menu_info' },
+{ title: '😄 Diversão', description: 'Charadas, frases e jogos', rowId: 'menu_div' },
+{ title: '🖼️ Imagem', description: 'Conversão e manipulação de imagens', rowId: 'menu_img' },
+{ title: '📲 Mídia', description: 'Downloads de redes sociais e YouTube', rowId: 'menu_midia' },
+];
+if (p.pAnti || p.pRules) rows.push({ title: '🛡️ Proteção', description: 'Anti-link, anti-mídia e regras', rowId: 'menu_prot' });
+if (p.pAdmin || p.pBan) rows.push({ title: '👮 Administração', description: 'Gerenciamento do grupo e moderação', rowId: 'menu_adm' });
+if (p.pSticker) rows.push({ title: '🎨 Stickers', description: 'Criação e edição de figurinhas', rowId: 'menu_stick' });
+if (p.isOwner) rows.push({ title: '👑 Dono', description: 'Painel de controle total do bot', rowId: 'menu_dono' });
+const imagemPath = CONFIG.imagens.principal;
+let imagemBuffer = null;
+if (fs.existsSync(imagemPath)) {
+try { imagemBuffer = fs.readFileSync(imagemPath); } catch {}
+}
+const legenda = `⚡ *${nomeBot}*
+
+👤 Solicitado por: @${nomeUsuario}
+🟢 Sistema: online
+
+📚 Toque no botão abaixo para abrir as categorias do menu.`;
+if (imagemBuffer) {
+await sock.sendMessage(ctx.chatId, { image: imagemBuffer, caption: legenda, mentions: [ctx.senderId] });
+} else {
+await sock.sendMessage(ctx.chatId, { text: legenda, mentions: [ctx.senderId] });
+}
+await sock.sendMessage(ctx.chatId, {
+  text: '📚 Selecione uma categoria abaixo para abrir o menu correspondente.',
+  title: 'Categorias de Menus',
+  footer: '⚡ KORTEX CORE',
+  buttonText: 'Abrir Menu',
+  sections: [{ title: 'Categorias', rows }]
+});
+}
+
 // ══════════════════════════════════════════════════════════
 // KORTEX KEY SYSTEM — FUNÇÕES AUXILIARES (REGRA 7, 8, 9)
 // ══════════════════════════════════════════════════════════
@@ -1328,6 +1374,19 @@ protecao: 'cprot', prot: 'cprot', seguranca: 'cprot',
 administracao: 'cadmin', admin: 'cadmin', administrador: 'cadmin',
 dono: 'cdono', owner: 'cdono', ownercore: 'cdono'
 };
+const MAPA_MENU_LISTA = {
+'menu_geral': 'cgeral',
+'menu_util': 'cutil',
+'menu_texto': 'ctexto',
+'menu_info': 'cinfo',
+'menu_div': 'cdiv',
+'menu_img': 'cimg',
+'menu_midia': 'cmidia',
+'menu_prot': 'cprot',
+'menu_adm': 'cadmin',
+'menu_stick': 'cstick',
+'menu_dono': 'cdono'
+};
 function resolverComandoPalavrasSoltas(palavras) {
 const maxPalavras = Math.min(palavras.length, 5);
 for (let n = maxPalavras; n >= 2; n--) {
@@ -1386,23 +1445,7 @@ if (nomeCategoria) {
 const alvo = MAPA_MENU_CATEGORIAS[normalizarTexto(nomeCategoria)];
 if (alvo && commands[alvo]) return await commands[alvo](sock, { ...ctx, args: ctx.args.slice(1) });
 }
-const p = await commands._getPerms(sock, ctx);
-const linhas = [];
-linhas.push('─── 📚 CATEGORIAS ───');
-linhas.push('🌐 Geral — .menu geral');
-linhas.push('🧰 Utilitários — .menu utilitarios');
-linhas.push('🔤 Texto — .menu texto');
-linhas.push('🌍 Informação — .menu informacao');
-linhas.push('😄 Diversão — .menu diversao');
-linhas.push('🖼️ Imagem — .menu imagem');
-linhas.push('📲 Mídia — .menu midia');
-if (p.pAdmin || p.pBan || p.pPromote) {
-linhas.push('🛡️ Proteção — .menu protecao');
-linhas.push('👮 Administração — .menu administracao');
-}
-if (p.pSticker) linhas.push('🎨 Stickers — .menu stickers');
-if (p.isOwner) linhas.push('👑 Dono — .menu dono');
-await enviarMenuKortex(sock, ctx, { titulo: 'MÓDULO PRINCIPAL', conteudo: linhas.join('\n'), imagemChave: 'principal' });
+await enviarMenuInterativo(sock, ctx);
 },
 'ajuda': async (sock, ctx) => { await commands['menu'](sock, ctx); },
 'cgeral': async (sock, ctx) => {
@@ -1410,9 +1453,12 @@ const conteudo = `─── 📌 BÁSICO ───
 • menu — categorias
 • ajuda — categorias
 • info — estado do bot
+• statusbot — resumo rápido
 • ping — velocidade
 • hora — hora de Maputo
 • meuid — IDs do sistema
+• linkgrupo — link do grupo
+• comandos — lista completa
 
 ─── 💎 ASSINATURA ───
 • planos — ver planos
@@ -1424,7 +1470,8 @@ const conteudo = `─── 📌 BÁSICO ───
 • pontos — meus pontos
 
 ─── 🌍 RÁPIDOS ───
-• traduzir [texto] — traduzir`;
+• traduzir [texto] — traduzir
+• meuvip — status do teu VIP`;
 await enviarMenuKortex(sock, ctx, { titulo: '🌐 MÓDULO GERAL', conteudo, imagemChave: 'geral' });
 },
 'cutil': async (sock, ctx) => {
@@ -1446,7 +1493,8 @@ const conteudo = `─── 🧮 CÁLCULOS ───
 • contar [texto] — letras/palavras
 
 ─── 🎙️ ÁUDIO ───
-• transcrever (responde) — transcreve áudio`;
+• transcrever (responde) — transcreve áudio
+• traduzir [texto] — tradução rápida`;
 await enviarMenuKortex(sock, ctx, { titulo: '🧰 MÓDULO UTILITÁRIOS', conteudo, imagemChave: 'utilitarios' });
 },
 'calcular': async (sock, ctx) => {
@@ -1550,7 +1598,8 @@ const conteudo = `─── 🔤 TEXTO ───
 • antonimo [palavra] — antónimos
 • leet [texto] — estilo leet
 • vaporwave [texto] — estilo vaporwave
-• gerarnome — nome aleatório`;
+• gerarnome — nome aleatório
+• traduzir [texto] — tradução rápida`;
 await enviarMenuKortex(sock, ctx, { titulo: '🔤 MÓDULO TEXTO', conteudo, imagemChave: 'texto' });
 },
 'romanos': async (sock, ctx) => {
@@ -1618,7 +1667,8 @@ const conteudo = `─── 🌍 CONSULTAS ───
 
 ─── ⚽ FUTEBOL ───
 • futebol [equipa] — últimos jogos
-• tabela [campeonato] — classificação`;
+• tabela [campeonato] — classificação
+• canal [url] — info do canal`;
 await enviarMenuKortex(sock, ctx, { titulo: '🌍 MÓDULO INFORMAÇÃO', conteudo, imagemChave: 'informacao' });
 },
 'wiki': async (sock, ctx) => {
@@ -1726,6 +1776,7 @@ await sock.sendMessage(ctx.chatId, { text: txt });
 const conteudo = `─── 😄 DIVERSÃO ───
 • charada — adivinha
 • frase — frase motivacional
+• gerarnome — nome aleatório
 
 ─── ⭕ JOGO DA VELHA ───
 • jogodavelha @user — desafiar
@@ -1869,11 +1920,14 @@ conteudo += `─── 🏟️ GRUPO ───
 • nome [novo nome] — renomeia grupo
 • foto (responde img) — troca a foto
 • criargrupo [nome] — cria novo grupo
-
-─── 📅 AGENDAMENTO ───
 • agendar HH:MM [msg] — agenda envio
 • agendar ls — lista agendamentos
-• agendar del [id] — apaga agendamento\n\n`;
+• agendar del [id] — apaga agendamento
+
+─── 🚫 COMANDOS DO GRUPO ───
+• desativarcomando .cmd — desliga
+• ativarcomando .cmd — liga
+• listardesativados — vê desativados\n\n`;
 }
 if (p.pBan) {
 conteudo += `─── 🔨 MODERAÇÃO ───
@@ -1890,10 +1944,9 @@ conteudo += `─── 👑 CARGOS ───
 • promover @user — torna admin
 • rebaixar @user — remove admin\n\n`;
 }
-conteudo += `─── 🚫 COMANDOS DO GRUPO ───
-• desativarcomando .cmd — desliga
-• ativarcomando .cmd — liga
-• listardesativados — vê desativados`;
+conteudo += `─── 📌 EXTRA ───
+• notificar on/off — avisos do grupo
+• boasvindas [msg]/off — mensagem de entrada`;
 await enviarMenuKortex(sock, ctx, { titulo: '👮 MÓDULO ADMINISTRAÇÃO', conteudo, imagemChave: 'administracao' });
 },
 'marcartodos': async (sock, ctx) => {
@@ -2131,7 +2184,8 @@ conteudo += `─── 📜 REGRAS ───
 conteudo += `─── ⚙️ GRUPO ───
 • boasvindas [msg]/off — msg de entrada
 • notificar on/off — avisos do grupo
-• ia on/off — IA livre no grupo`;
+• ia on/off — IA livre no grupo
+• semprefixo on/off — ativar comandos sem ponto`;
 await enviarMenuKortex(sock, ctx, { titulo: '🛡️ MÓDULO PROTEÇÃO', conteudo, imagemChave: 'protecao' });
 },
 'antimidia': async (sock, ctx) => {
@@ -2266,6 +2320,7 @@ const conteudo = `─── 🎵 REDES ───
 
 ─── 👻 EXTRAS ───
 • revelar — revela status/foto
+• guiamidia — mostra acesso VIP
 • fichamidia [link] — dados da mídia
 • canal [url] — info do canal
 • zip [links] — compacta em zip
@@ -2287,7 +2342,8 @@ try {
 const dados = await extrairGenDownload(link);
 const fmt = escolherFormatoGen(dados, 'video');
 const buf = await baixarBufferGen(fmt);
-if (buf) return await sock.sendMessage(ctx.chatId, { video: buf, caption: `🎵 ${dados.title || 'Vídeo'}\n👤 ${dados.author || ''}\n⚡ Kortex`, mimetype: 'video/mp4' });
+const conta = extrairNomeConta(dados);
+if (buf) return await sock.sendMessage(ctx.chatId, { video: buf, caption: `🎵 ${dados.title || 'Vídeo'}\n👤 ${conta}\n⚡ Kortex`, mimetype: 'video/mp4' });
 } catch (e) { console.warn('tiktok:', e.message); }
 await sock.sendMessage(ctx.chatId, { text: '😔 Não consegui baixar este TikTok.' });
 },
@@ -2309,17 +2365,27 @@ await sock.sendMessage(ctx.chatId, { text: '😔 Não consegui extrair o áudio 
 if (!verificarAcessoMidia(ctx, 'instagram')) return sock.sendMessage(ctx.chatId, { text: '❌ Acesso negado!\n\n💡 Usa .guiamidia para ver como desbloquear.' });
 const link = ctx.args[0];
 if (!link || !link.includes('instagram.com')) return sock.sendMessage(ctx.chatId, { text: 'Uso: .instagram [link]' });
-await sock.sendMessage(ctx.chatId, { text: '📸 ⚡ Instagram\n⏳ Só um instante...' });
+await sock.sendMessage(ctx.chatId, { text: '📸 *A preparar o Instagram...*' });
 try {
 const dados = await extrairGenDownload(link);
+const conta = extrairNomeConta(dados);
 const formatos = dados?.formats || [];
 const videos = formatos.filter(f => f.type === 'video');
 const imagens = formatos.filter(f => f.type === 'image' || /jpe?g|png|webp/.test(f.ext || ''));
-if (videos.length) { const buf = await baixarBufferGen(videos[0]); if (buf) return await sock.sendMessage(ctx.chatId, { video: buf, caption: `Instagram — ${dados.author || ''}`, mimetype: 'video/mp4' }); }
-else if (imagens.length) {
-let i = 0;
-for (const img of imagens.slice(0, 4)) { const buf = await baixarBufferGen(img, 32 * 1024 * 1024); if (buf) { await sock.sendMessage(ctx.chatId, { image: buf, caption: `📸 (${i + 1}/${Math.min(imagens.length, 4)})` }); i++; await new Promise(r => setTimeout(r, 1000)); } }
-if (i > 0) return;
+if (videos.length) {
+const buf = await baixarBufferGen(videos[0]);
+if (buf) return await sock.sendMessage(ctx.chatId, { video: buf, caption: `📹 *Instagram*\n\n👤 ${conta}\n📌 ${dados.title || 'Vídeo'}\n\n⚡ Kortex`, mimetype: 'video/mp4' });
+}
+if (imagens.length) {
+for (let i = 0; i < Math.min(imagens.length, 4); i++) {
+const img = imagens[i];
+const buf = await baixarBufferGen(img, 32 * 1024 * 1024);
+if (buf) {
+await sock.sendMessage(ctx.chatId, { image: buf, caption: `📸 *Instagram*\n\n👤 ${conta}\n${i + 1}/${Math.min(imagens.length, 4)}\n\n⚡ Kortex` });
+await new Promise(r => setTimeout(r, 800));
+}
+}
+return;
 }
 } catch (e) { console.warn('instagram:', e.message); }
 await sock.sendMessage(ctx.chatId, { text: '😔 Não consegui baixar do Instagram.' });
@@ -2345,68 +2411,64 @@ if (!verificarAcessoMidia(ctx, 'youtube')) return sock.sendMessage(ctx.chatId, {
 const pesquisa = ctx.args.join(' ');
 if (!pesquisa) return sock.sendMessage(ctx.chatId, { text: 'Uso: .youtube [pesquisa]' });
 try {
-await sock.sendMessage(ctx.chatId, { text: '🔍 A pesquisar...' });
+await sock.sendMessage(ctx.chatId, { text: '🔎 *A procurar no YouTube...*' });
 const yts = require('yt-search');
 const resultados = await yts(pesquisa);
 const videos = resultados.videos.slice(0, 5);
-if (!videos.length) return sock.sendMessage(ctx.chatId, { text: '❌ Nenhum resultado.' });
-let texto = `🎬 *RESULTADOS*\n\n`;
-videos.forEach((vid, i) => { texto += `${i + 1}. ${vid.title.substring(0, 50)}\n⏱️ ${vid.timestamp || ''} | 🔗 ${vid.url}\n\n`; });
-texto += `💡 .youtubeaudio [link] / .youtubevideo [link]`;
-const thumbnail = videos[0]?.image || videos[0]?.thumbnail;
+if (!videos.length) return sock.sendMessage(ctx.chatId, { text: '❌ Nenhum resultado encontrado para essa pesquisa.' });
+for (let i = 0; i < videos.length; i++) {
+const vid = videos[i];
+const thumbnail = vid.image || vid.thumbnail;
+const texto = `🎬 *Resultado ${i + 1}*\n\n📌 *${(vid.title || 'Vídeo').substring(0, 80)}*\n⏱️ ${vid.timestamp || '—'}\n🔗 ${vid.url}\n\n💡 Usa .youtubeaudio [link] ou .youtubevideo [link]`;
 if (thumbnail) await sock.sendMessage(ctx.chatId, { image: { url: thumbnail }, caption: texto });
 else await sock.sendMessage(ctx.chatId, { text: texto });
-} catch { await sock.sendMessage(ctx.chatId, { text: '❌ Erro na pesquisa.' }); }
+}
+} catch { await sock.sendMessage(ctx.chatId, { text: '❌ Não foi possível pesquisar no YouTube agora.' }); }
 },
+
 'youtubevideo': async (sock, ctx) => {
 if (!verificarAcessoMidia(ctx, 'youtubevideo')) return sock.sendMessage(ctx.chatId, { text: '❌ Acesso negado!\n\n💡 Usa .guiamidia para ver como desbloquear.' });
 const link = ctx.args[0];
 if (!link || (!link.includes('youtube.com') && !link.includes('youtu.be'))) return sock.sendMessage(ctx.chatId, { text: 'Uso: .youtubevideo [link]' });
-await sock.sendMessage(ctx.chatId, { text: '🎬  YouTube Vídeo\n⏳ A descarregar...' });
-try {
-const dados = await extrairGenDownload(link);
-if ((dados.duration || 0) > 1800) return sock.sendMessage(ctx.chatId, { text: '❌ Vídeos > 30 min não suportados.' });
-const fmt = escolherFormatoGen(dados, 'video');
-const buf = await baixarBufferGen(fmt);
-if (buf) {
-const videoId = extrairVideoId(link);
-const thumbnail = videoId ? `https://img.youtube.com/vi/${videoId}/hqdefault.jpg` : null;
-return await sock.sendMessage(ctx.chatId, { video: buf, mimetype: 'video/mp4', caption: `${(dados.title || 'Vídeo').substring(0, 60)}\n⚡ Kortex`, contextInfo: thumbnail ? { externalAdReply: { title: dados.title || 'Vídeo', body: dados.author || '', thumbnailUrl: thumbnail, mediaType: 2, renderLargerThumbnail: true } } : undefined });
-}
-} catch (e) { console.warn('youtubevideo:', e.message); }
-await sock.sendMessage(ctx.chatId, { text: '😔 Não consegui baixar o vídeo.' });
+const textoEscolha = `🎬 *Preparar vídeo do YouTube*\n\n🔗 ${link}\n\nEscolhe como quer receber:\n\n1️⃣ *Vídeo* — envia como vídeo\n2️⃣ *Documento* — guarda como ficheiro\n\nResponde com *1* ou *2*.`;
+db.fluxosKey.set(ctx.chatId, {
+  tipo: 'youtubevideo',
+  passo: 'escolherFormato',
+  dados: { link, senderId: ctx.senderId },
+  expiraEm: Date.now() + 180000
+});
+await sock.sendMessage(ctx.chatId, { text: textoEscolha });
 },
 'youtubeaudio': async (sock, ctx) => {
 if (!verificarAcessoMidia(ctx, 'youtubeaudio')) return sock.sendMessage(ctx.chatId, { text: '❌ Acesso negado!\n\n💡 Usa .guiamidia para ver como desbloquear.' });
 const link = ctx.args[0];
 if (!link || (!link.includes('youtube.com') && !link.includes('youtu.be'))) return sock.sendMessage(ctx.chatId, { text: 'Uso: .youtubeaudio [link]' });
-await sock.sendMessage(ctx.chatId, { text: '🎵  YouTube Áudio\n A extrair o som...' });
-try {
-const dados = await extrairGenDownload(link);
-const fmt = escolherFormatoGen(dados, 'audio');
-const buf = await baixarBufferGen(fmt, 32 * 1024 * 1024);
-if (buf) {
-const ehMp3 = (fmt.ext || '') === 'mp3';
-return await sock.sendMessage(ctx.chatId, { audio: buf, mimetype: ehMp3 ? 'audio/mpeg' : 'audio/mp4', fileName: `${(dados.title || 'audio').replace(/[^a-z0-9]/gi, '_').substring(0, 50)}.${ehMp3 ? 'mp3' : 'm4a'}`, ptt: false });
-}
-} catch (e) { console.warn('youtubeaudio:', e.message); }
-await sock.sendMessage(ctx.chatId, { text: '😔 Não consegui baixar o áudio.' });
+const textoEscolha = `🎵 *Preparar áudio do YouTube*\n\n🔗 ${link}\n\nEscolhe como quer receber:\n\n1️⃣ *Áudio* — envia como música\n2️⃣ *Documento* — guarda como ficheiro\n\nResponde com *1* ou *2*.`;
+db.fluxosKey.set(ctx.chatId, {
+  tipo: 'youtubeaudio',
+  passo: 'escolherFormato',
+  dados: { link, senderId: ctx.senderId },
+  expiraEm: Date.now() + 180000
+});
+await sock.sendMessage(ctx.chatId, { text: textoEscolha });
 },
 'pinterest': async (sock, ctx) => {
 if (!verificarAcessoMidia(ctx, 'pinterest')) return sock.sendMessage(ctx.chatId, { text: '❌ Acesso negado!\n\n💡 Usa .guiamidia para ver como desbloquear.' });
 const link = ctx.args[0];
 if (!link || !/pinterest\.(com|ca|co\.uk|fr|de|es)/i.test(link)) return sock.sendMessage(ctx.chatId, { text: '📌 Uso: .pinterest [link]' });
-await sock.sendMessage(ctx.chatId, { text: '📌 ⚡ Pinterest\n⏳ A extrair imagens...' });
+await sock.sendMessage(ctx.chatId, { text: '📌 *A extrair imagens...*' });
 try {
 const dados = await extrairGenDownload(link);
 const imagens = (dados.formats || []).filter(f => f.type === 'image' || /jpe?g|png|webp/i.test(f.ext || ''));
 if (!imagens.length) return sock.sendMessage(ctx.chatId, { text: '❌ Nenhuma imagem encontrada.' });
-let i = 0;
-for (const img of imagens.slice(0, 10)) {
+for (let i = 0; i < Math.min(imagens.length, 10); i++) {
+const img = imagens[i];
 const buf = await baixarBufferGen(img, 32 * 1024 * 1024);
-if (buf) { await sock.sendMessage(ctx.chatId, { image: buf, caption: `📌 Pinterest (${i + 1}/${Math.min(imagens.length, 10)})` }); i++; await new Promise(r => setTimeout(r, 1000)); }
+if (buf) {
+await sock.sendMessage(ctx.chatId, { image: buf, caption: `📌 *Pinterest*\n\n${i + 1}/${Math.min(imagens.length, 10)}\n\n⚡ Kortex` });
+await new Promise(r => setTimeout(r, 800));
 }
-if (i === 0) await sock.sendMessage(ctx.chatId, { text: '❌ Não consegui baixar as imagens.' });
+}
 } catch (e) { console.warn('pinterest:', e.message); await sock.sendMessage(ctx.chatId, { text: '❌ Erro ao baixar do Pinterest.' }); }
 },
 'revelar': async (sock, ctx) => {
@@ -2447,15 +2509,18 @@ else await sock.sendMessage(ctx.chatId, { text: texto });
 if (!verificarAcessoMidia(ctx, 'canal')) return sock.sendMessage(ctx.chatId, { text: '❌ Acesso negado!\n\n💡 Usa .guiamidia para ver como desbloquear.' });
 const link = ctx.args[0];
 if (!link) return sock.sendMessage(ctx.chatId, { text: 'Uso: .canal [link]' });
-await sock.sendMessage(ctx.chatId, { text: '📡 A listar vídeos...' });
+await sock.sendMessage(ctx.chatId, { text: '📡 *A listar vídeos...*' });
 try {
 const r = await axios.post('https://gendownload.com/api/channel', { url: link, limit: 10 }, { headers: { 'Content-Type': 'application/json' }, timeout: 30000 });
 const itens = r.data?.items || [];
 if (!itens.length) return sock.sendMessage(ctx.chatId, { text: '❌ Nenhum vídeo.' });
-let texto = `📡 *VÍDEOS*\n\n`;
-itens.slice(0, 10).forEach((v, i) => { texto += `${i + 1}. ${(v.title || 'Sem título').substring(0, 45)}\n🔗 ${v.url}\n\n`; });
-texto += `💡 Usa .baixar [link]`;
-await sock.sendMessage(ctx.chatId, { text: texto });
+for (let i = 0; i < Math.min(itens.length, 10); i++) {
+const v = itens[i];
+const thumb = v.thumbnail || v.image || v.img || null;
+const texto = `📡 *Vídeo ${i + 1}*\n\n📌 *${(v.title || 'Sem título').substring(0, 80)}*\n⏱️ ${v.duration || '—'}\n🔗 ${v.url || '—'}\n\n💡 Usa .youtubeaudio [link] ou .youtubevideo [link]`;
+if (thumb) await sock.sendMessage(ctx.chatId, { image: { url: thumb }, caption: texto });
+else await sock.sendMessage(ctx.chatId, { text: texto });
+}
 } catch { await sock.sendMessage(ctx.chatId, { text: '❌ Não consegui listar.' }); }
 },
 'zip': async (sock, ctx) => {
@@ -2494,7 +2559,9 @@ if (!p.pSticker) throw new PermissaoNegada();
 const conteudo = `─── 🎨 STICKERS ───
 • figurinha — cria sticker
 • stickertexto [texto] — sticker com texto
-• infosticker — dados do sticker`;
+• infosticker — dados do sticker
+• converterimagem — sticker em imagem
+• roubarsticker — salva o sticker`;
 await enviarMenuKortex(sock, ctx, { titulo: '🎨 MÓDULO STICKERS', conteudo, imagemChave: 'stickers' });
 },
 'figurinha': async (sock, ctx) => {
@@ -2557,6 +2624,7 @@ const conteudo = `─── 💎 VIPs GRUPO ───
 
 ─── 👤 VIPs USER ───
 • vipuser @user [n] [d] — dá VIP
+• removervipuser @user — remove VIP do user
 • meuvip — vê o teu VIP
 
 ─── 🛠️ SISTEMA ───
@@ -2568,6 +2636,7 @@ const conteudo = `─── 💎 VIPs GRUPO ───
 • backup / restaurar — backup dos dados
 • modelo [nome] — muda modelo de IA
 • semprefixo on/off — comandos sem ponto
+• gerarkey / desativarkey / mudarkey — gestão de keys
 
 ─── 🔇 CONTROLO ───
 • desligarbot / ligarbot — liga/desliga
@@ -2580,7 +2649,8 @@ const conteudo = `─── 💎 VIPs GRUPO ───
 
 ─── 🧾 OUTROS ───
 • recibo [p] [d] [n] — gera recibo
-• meuid — IDs do sistema`;
+• meuid — IDs do sistema
+• comandos — lista completa`;
 await enviarMenuKortex(sock, ctx, { titulo: '👑 PAINEL DO DONO', conteudo, imagemChave: 'dono', rodape: '⚡ KORTEX CORE - ACESSO TOTAL' });
 },
 'ping': async (sock, ctx) => {
@@ -2612,6 +2682,33 @@ await sock.sendMessage(ctx.chatId, { text: `💎 Nível: ${nivel.nome}\n⏳ ${ut
 'meuid': async (sock, ctx) => {
 const botId = sock.user?.id || 'Desconhecido';
 await sock.sendMessage(ctx.chatId, { text: `🆔 *IDs*\n\n🤖 Bot: ${botId}\n👑 Dono: ${CONFIG.ownerId}\n👤 Tu: ${ctx.senderId}\nÉ dono? ${utils.isOwner(ctx.senderId) ? '✅' : '❌'}` });
+},
+'linkgrupo': async (sock, ctx) => {
+if (!ctx.isGroup) return sock.sendMessage(ctx.chatId, { text: '⚠️ Este comando só funciona em grupos.' });
+try {
+const code = await sock.groupInviteCode(ctx.chatId);
+const link = `https://chat.whatsapp.com/${code}`;
+await sock.sendMessage(ctx.chatId, { text: `🔗 *LINK DO GRUPO*\n\n${link}` });
+} catch {
+await sock.sendMessage(ctx.chatId, { text: '❌ Não consegui gerar o link do grupo. Verifica se o bot tem permissão de administrador.' });
+}
+},
+'statusbot': async (sock, ctx) => {
+const memoria = (process.memoryUsage().heapUsed / 1024 / 1024).toFixed(1);
+const grupo = ctx.isGroup ? '✅ Grupo' : '📩 PV';
+const vipGrupo = ctx.isGroup ? (db.gruposVIP.get(ctx.chatId) ? '✅ Activo' : '❌ Inativo') : '—';
+await sock.sendMessage(ctx.chatId, { text: `⚡ *STATUS DO BOT*\n\n📡 Estado: online\n⏱️ Uptime: ${utils.tempoRestante(process.uptime() * 1000)}\n💾 Memória: ${memoria} MB\n📍 Chat: ${grupo}\n💎 VIP: ${vipGrupo}\n🔧 Comandos: ${Object.keys(commands).length}` });
+},
+'dica': async (sock, ctx) => {
+const dicas = [
+'💡 Usa .menu para ver todas as categorias do bot.',
+'💡 Se quiser baixar áudio do YouTube, usa .youtubeaudio [link].',
+'💡 O comando .linkgrupo gera o link do grupo em segundos.',
+'💡 O bot pode proteger grupos com anti-link, warns e administração VIP.',
+'💡 Pode usar .statusgrupo para ver o VIP ativo do grupo.'
+];
+const dica = dicas[Math.floor(Math.random() * dicas.length)];
+await sock.sendMessage(ctx.chatId, { text: dica });
 },
 'indicar': async (sock, ctx) => {
 if (!ctx.args[0]) return sock.sendMessage(ctx.chatId, { text: 'Uso: .indicar [numero]' });
@@ -2698,6 +2795,18 @@ const diasFinais = Math.min(dias, NIVEIS_VIP_USER[nivel].maxDias);
 db.usersVIP.set(target, { nivel, expiraEm: Date.now() + (diasFinais * 86400000), ativadoEm: Date.now() });
 salvarDados();
 await sock.sendMessage(ctx.chatId, { text: `✅ *VIP USER ACTIVADO*\n👤 @${target.split('@')[0]}\n💎 ${NIVEIS_VIP_USER[nivel].nome}\n⏳ ${diasFinais} dias\n🔓 ${NIVEIS_VIP_USER[nivel].cmds.map(c => '.' + c).join(', ')}`, mentions: [target] });
+},
+'removervipuser': async (sock, ctx) => {
+if (!utils.isOwner(ctx.senderId)) throw new PermissaoNegada();
+let target = utils.getQuotedMention(ctx.msg) || utils.getMentions(ctx.msg)[0];
+if (!target && ctx.args[0]) {
+  const raw = String(ctx.args[0]).trim();
+  target = raw.includes('@') ? raw : `${raw.replace(/\D/g, '')}@s.whatsapp.net`;
+}
+if (!target) return sock.sendMessage(ctx.chatId, { text: 'Uso: .removervipuser [@user|id]\nEx: .removervipuser @usuario ou .removervipuser 258840000000' });
+if (!db.usersVIP.has(target)) return sock.sendMessage(ctx.chatId, { text: `❌ @${target.split('@')[0]} não tem VIP activo.`, mentions: [target] });
+db.usersVIP.delete(target); salvarDados();
+await sock.sendMessage(ctx.chatId, { text: `✅ *VIP USER REMOVIDO*\n👤 @${target.split('@')[0]}`, mentions: [target] });
 },
 'meuvip': async (sock, ctx) => {
 const vip = db.usersVIP.get(ctx.senderId);
@@ -3212,12 +3321,123 @@ return;
 }
 }
 
+const rowIdSelecionado = msg.message?.listResponseMessage?.singleSelectReply?.selectedRowId || fullText;
+const menuSelecionado = rowIdSelecionado && MAPA_MENU_LISTA[rowIdSelecionado];
+if (menuSelecionado && commands[menuSelecionado]) {
+const perms = await commands._getPerms(sock, { chatId, senderId, isGroup, msg });
+const permitido =
+menuSelecionado === 'cgeral' || menuSelecionado === 'cutil' || menuSelecionado === 'ctexto' || menuSelecionado === 'cinfo' || menuSelecionado === 'cdiv' || menuSelecionado === 'cimg' || menuSelecionado === 'cmidia' ? true :
+menuSelecionado === 'cprot' ? (perms.pAnti || perms.pRules || perms.isOwner || perms.pAdmin || perms.pBan) :
+menuSelecionado === 'cadmin' ? (perms.pAdmin || perms.pBan || perms.isOwner) :
+menuSelecionado === 'cstick' ? perms.pSticker :
+menuSelecionado === 'cdono' ? perms.isOwner : true;
+if (permitido) {
+await commands[menuSelecionado](sock, { chatId, senderId, isGroup, msg, args: [] });
+return;
+}
+}
+
 // ══════════════════════════════════════════════════════════
 // KORTEX KEY SYSTEM — HANDLER DE FLUXOS
 // ══════════════════════════════════════════════════════════
 const fluxoAtivo = db.fluxosKey.get(chatId);
 if (fluxoAtivo && Date.now() < fluxoAtivo.expiraEm) {
 const resposta = fullText.toLowerCase().trim();
+
+// Fluxo de escolha de formato do YouTube áudio
+if (fluxoAtivo.tipo === 'youtubeaudio' && fluxoAtivo.passo === 'escolherFormato') {
+const { link, senderId: userId } = fluxoAtivo.dados;
+if (senderId !== userId) return;
+const escolha = resposta.trim().toLowerCase();
+const modo = escolha === '1' || escolha === 'audio' || escolha === 'áudio' || escolha.includes('audio') ? 'audio'
+: escolha === '2' || escolha === 'documento' || escolha === 'doc' || escolha.includes('documento') ? 'documento'
+: null;
+if (!modo) {
+await sock.sendMessage(chatId, { text: '❌ Responde com *1* para áudio ou *2* para documento.' });
+return;
+}
+try {
+const dados = await extrairGenDownload(link);
+const fmt = escolherFormatoGen(dados, 'audio');
+if (!fmt?.url) {
+await sock.sendMessage(chatId, { text: '😔 Não consegui extrair o áudio do link informado.' });
+db.fluxosKey.delete(chatId);
+return;
+}
+const buf = await baixarBufferGen(fmt, 32 * 1024 * 1024);
+if (!buf) {
+await sock.sendMessage(chatId, { text: '😔 Não consegui baixar o áudio.' });
+db.fluxosKey.delete(chatId);
+return;
+}
+const ehMp3 = (fmt.ext || '') === 'mp3';
+const fileName = `${(dados.title || 'audio').replace(/[^a-z0-9]/gi, '_').substring(0, 50)}.${ehMp3 ? 'mp3' : 'm4a'}`;
+const titulo = (dados.title || 'Áudio do YouTube').substring(0, 90);
+const extensao = ehMp3 ? 'MP3' : 'M4A';
+if (modo === 'audio') {
+await sock.sendMessage(chatId, { audio: buf, mimetype: ehMp3 ? 'audio/mpeg' : 'audio/mp4', fileName, ptt: false, caption: `✅ *Áudio pronto*\n\n📌 *Título:* ${titulo}\n📦 *Formato:* ${extensao}\n\n⚡ *Kortex*` });
+} else {
+await sock.sendMessage(chatId, { document: buf, mimetype: ehMp3 ? 'audio/mpeg' : 'audio/mp4', fileName, caption: `✅ *Áudio em documento*\n\n📌 *Título:* ${titulo}\n📦 *Formato:* ${extensao}\n\n⚡ *Kortex*` });
+}
+} catch (e) {
+console.warn('youtubeaudio fluxo:', e.message);
+await sock.sendMessage(chatId, { text: '😔 Ocorreu um erro ao processar a escolha do formato.' });
+}
+db.fluxosKey.delete(chatId);
+return;
+}
+
+// Fluxo de escolha de formato do YouTube vídeo
+if (fluxoAtivo.tipo === 'youtubevideo' && fluxoAtivo.passo === 'escolherFormato') {
+const { link, senderId: userId } = fluxoAtivo.dados;
+if (senderId !== userId) return;
+const escolha = resposta.trim().toLowerCase();
+const modo = escolha === '1' || escolha === 'video' || escolha === 'vídeo' || escolha.includes('video') || escolha.includes('vídeo') ? 'video'
+: escolha === '2' || escolha === 'documento' || escolha === 'doc' || escolha.includes('documento') ? 'documento'
+: null;
+if (!modo) {
+await sock.sendMessage(chatId, { text: '❌ Responde com *1* para vídeo ou *2* para documento.' });
+return;
+}
+try {
+const dados = await extrairGenDownload(link);
+if ((dados.duration || 0) > 1800) {
+await sock.sendMessage(chatId, { text: '❌ Vídeos com mais de 30 minutos não são suportados.' });
+db.fluxosKey.delete(chatId);
+return;
+}
+const fmt = escolherFormatoGen(dados, 'video');
+if (!fmt?.url) {
+await sock.sendMessage(chatId, { text: '😔 Não consegui extrair o vídeo do link informado.' });
+db.fluxosKey.delete(chatId);
+return;
+}
+const buf = await baixarBufferGen(fmt, 64 * 1024 * 1024);
+if (!buf) {
+await sock.sendMessage(chatId, { text: '😔 Não consegui baixar o vídeo.' });
+db.fluxosKey.delete(chatId);
+return;
+}
+const videoId = extrairVideoId(link);
+const thumbnail = videoId ? `https://img.youtube.com/vi/${videoId}/hqdefault.jpg` : null;
+const titulo = (dados.title || 'Vídeo do YouTube').substring(0, 90);
+const canal = dados.author || 'Canal desconhecido';
+const duracao = dados.duration ? (() => { const s = Number(dados.duration); const h = Math.floor(s / 3600); const m = Math.floor((s % 3600) / 60); const seg = s % 60; return h ? `${h}:${String(m).padStart(2,'0')}:${String(seg).padStart(2,'0')}` : `${m}:${String(seg).padStart(2,'0')}`; })() : '—';
+const qualidade = fmt?.label || '—';
+const fileName = `${(dados.title || 'video').replace(/[^a-z0-9]/gi, '_').substring(0, 50)}.mp4`;
+const caption = `✅ *Vídeo pronto*\n\n📌 *Título:* ${titulo}\n📺 *Canal:* ${canal}\n⏱️ *Duração:* ${duracao}\n🎞️ *Qualidade:* ${qualidade}\n\n⚡ *Kortex*`;
+if (modo === 'video') {
+await sock.sendMessage(chatId, { video: buf, mimetype: 'video/mp4', caption, contextInfo: thumbnail ? { externalAdReply: { title: titulo, body: canal, thumbnailUrl: thumbnail, mediaType: 2, renderLargerThumbnail: true } } : undefined });
+} else {
+await sock.sendMessage(chatId, { document: buf, mimetype: 'video/mp4', fileName, caption: `✅ *Vídeo em documento*\n\n📌 *Título:* ${titulo}\n📺 *Canal:* ${canal}\n🎞️ *Qualidade:* ${qualidade}\n\n⚡ *Kortex*` });
+}
+} catch (e) {
+console.warn('youtubevideo fluxo:', e.message);
+await sock.sendMessage(chatId, { text: '😔 Ocorreu um erro ao processar a escolha do formato.' });
+}
+db.fluxosKey.delete(chatId);
+return;
+}
 
 // Fluxo de desativar Key
 if (fluxoAtivo.tipo === 'desativarkey' && fluxoAtivo.passo === 'confirmar') {
@@ -3558,7 +3778,7 @@ else if (['antilink','antimidia','autodelete','proibirpalavra','desbanirpalavra'
 else if (['regras','boasvindas'].includes(detecao.comando)) temPermissaoDireta = await utils.hasRulesRights(sock, chatId, senderId);
 else if (detecao.comando === 'silenciar' || detecao.comando === 'dessilenciar' || detecao.comando === 'advertir' || detecao.comando === 'removeradvertencia') temPermissaoDireta = await utils.hasBanRights(sock, chatId, senderId);
 else if (detecao.comando === 'desativarcomando' || detecao.comando === 'ativarcomando') temPermissaoDireta = await utils.hasGroupAdminRights(sock, chatId, senderId);
-else if (['ativarvip','removervip'].includes(detecao.comando)) temPermissaoDireta = utils.isOwner(senderId);
+else if (['ativarvip','removervip','removervipuser'].includes(detecao.comando)) temPermissaoDireta = utils.isOwner(senderId);
 else if (['desligarbot','ligarbot','ignorar','designorar','prefixo','backup','restaurar','modelo','entrar','atalho','removeratalho'].includes(detecao.comando)) temPermissaoDireta = utils.isOwner(senderId);
 else if (['gerarkey','desativarkey','mudarkey'].includes(detecao.comando)) temPermissaoDireta = utils.isOwner(senderId);
 if (temPermissaoDireta) {
