@@ -9,33 +9,53 @@ const CREDENTIAL_CANDIDATES = [
   path.join(__dirname, 'serviceAccountKey.json')
 ];
 
-const serviceAccountPath = CREDENTIAL_CANDIDATES.find(file => fs.existsSync(file));
-const appConfig = { databaseURL: DATABASE_URL };
+function resolveServiceAccount() {
+  const explicitPath = process.env.FIREBASE_SERVICE_ACCOUNT_PATH || process.env.GOOGLE_APPLICATION_CREDENTIALS;
+  if (explicitPath && fs.existsSync(explicitPath)) return explicitPath;
 
-if (serviceAccountPath) {
-  appConfig.credential = admin.credential.cert(serviceAccountPath);
-} else {
-  try {
-    appConfig.credential = admin.credential.applicationDefault();
-  } catch (e) {
-    console.warn('⚠️ Firebase: sem credenciais locais; o bot continuará em modo local.');
+  const fromProject = CREDENTIAL_CANDIDATES.find(file => fs.existsSync(file));
+  if (fromProject) return fromProject;
+
+  return null;
+}
+
+let db = null;
+let initialized = false;
+
+try {
+  const serviceAccountPath = resolveServiceAccount();
+  const appConfig = { databaseURL: DATABASE_URL };
+
+  if (serviceAccountPath) {
+    appConfig.credential = admin.credential.cert(serviceAccountPath);
   }
+
+  if (!admin.apps.length && (serviceAccountPath || process.env.FIREBASE_CLIENT_EMAIL && process.env.FIREBASE_PRIVATE_KEY)) {
+    admin.initializeApp(appConfig);
+    initialized = true;
+  }
+
+  if (initialized) {
+    db = admin.database();
+  }
+} catch (e) {
+  console.warn('⚠️ Firebase: falha de autenticação. A bot continuará em modo local sem sincronização cloud.', e && e.message ? e.message : e);
 }
 
-if (!admin.apps.length) {
-  admin.initializeApp(appConfig);
+if (!initialized && !db) {
+  console.warn('⚠️ Firebase: sem credenciais válidas em runtime; modo local ativo e backup cloud desativado.');
 }
-
-const db = admin.database();
 
 const Backup = {
   async salvarTudo(obj) {
+    if (!db) return false;
     const payload = typeof obj === 'string' ? obj : JSON.stringify(obj);
     await db.ref('backup').set(payload);
     return true;
   },
 
   async carregarTudo() {
+    if (!db) return {};
     const snapshot = await db.ref('backup').once('value');
     const value = snapshot.val();
     if (value === null || value === undefined || value === '') return {};
@@ -52,15 +72,16 @@ const Backup = {
 
 const Stats = {
   async set(path, value) {
-    if (!path) return false;
+    if (!db || !path) return false;
     await db.ref('stats').child(String(path)).set(value);
     return true;
   },
 
   async getAllStats() {
+    if (!db) return {};
     const snapshot = await db.ref('stats').once('value');
     return snapshot.val() || {};
   }
 };
 
-module.exports = { admin, db, Backup, Stats };
+module.exports = { admin, db, Backup, Stats, initialized };
