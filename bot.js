@@ -1,4 +1,5 @@
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, makeCacheableSignalKeyStore, downloadMediaMessage } = require('@innovatorssoft/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, makeCacheableSignalKeyStore, downloadMediaMessage, generateWAMessageFromContent } = require('@whiskeysockets/baileys');
+const { generateQuickReplyButtons, generateInteractiveButtonMessage, generateInteractiveListMessage } = require('@innovatorssoft/baileys');
 require('dotenv').config();
 const Groq = require('groq-sdk');
 const pino = require('pino');
