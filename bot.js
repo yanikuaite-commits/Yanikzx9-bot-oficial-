@@ -213,7 +213,19 @@ return m.extendedTextMessage?.contextInfo
 || m.listResponseMessage?.contextInfo
 || m.templateButtonReplyMessage?.contextInfo
 || m.buttonsMessage?.contextInfo
+|| m.interactiveResponseMessage?.contextInfo
+|| msg?.message?.extendedTextMessage?.contextInfo
 || {};
+}
+
+const cacheMensagens = new Map();
+function guardarMensagemCache(msg) {
+if (!msg?.key?.id) return;
+cacheMensagens.set(msg.key.id, msg);
+if (cacheMensagens.size > 400) {
+const primeiro = cacheMensagens.keys().next().value;
+cacheMensagens.delete(primeiro);
+}
 }
 
 function idParticipanteEvento(p) {
@@ -974,6 +986,34 @@ return base;
 console.warn('Cartao boas-vindas:', e.message);
 return null;
 }
+}
+
+const boasVindasEnviadas = new Map();
+async function enviarBoasVindas(sock, groupId, participant) {
+const jid = idParticipanteEvento(participant);
+if (!jid || !groupId) return;
+const chave = `${groupId}|${jid}`;
+const agora = Date.now();
+if (boasVindasEnviadas.get(chave) && agora - boasVindasEnviadas.get(chave) < 15000) return;
+boasVindasEnviadas.set(chave, agora);
+if (boasVindasEnviadas.size > 200) {
+for (const [k, t] of boasVindasEnviadas) { if (agora - t > 60000) boasVindasEnviadas.delete(k); }
+}
+const rawBotJid = sock.user?.id || '';
+const botJid = rawBotJid.includes(':') ? `${rawBotJid.split(':')[0]}@s.whatsapp.net` : rawBotJid;
+if (mesmoJid(jid, botJid) || mesmoJid(jid, `${CONFIG.botNumber}@s.whatsapp.net`)) return;
+let nomeGrupo = 'Grupo';
+try { nomeGrupo = (await getMetadataCached(sock, groupId))?.subject || 'Grupo'; } catch {}
+const nome = `@${String(jid).split('@')[0]}`;
+const template = db.grupos.boasvindas.get(groupId) || '👋 Bem-vindo(a) @nome ao grupo *@grupo*!';
+const textoFinal = template.replace(/@nome/g, nome).replace(/@grupo/g, nomeGrupo);
+const cartao = await gerarCartaoBoasVindas(sock, jid, groupId);
+if (cartao) {
+try { await sock.sendMessage(groupId, { image: cartao, caption: textoFinal, mentions: [jid] }); return; } catch (e) { console.warn('boas-vindas img+mentions:', e.message); }
+try { await sock.sendMessage(groupId, { image: cartao, caption: textoFinal }); return; } catch (e) { console.warn('boas-vindas img:', e.message); }
+}
+try { await sock.sendMessage(groupId, { text: textoFinal, mentions: [jid] }); }
+catch { await sock.sendMessage(groupId, { text: textoFinal }).catch((e) => console.warn('boas-vindas texto:', e.message)); }
 }
 
 async function gerarBlocosRelatorio(sock) {
@@ -2185,16 +2225,28 @@ if (!ctx.isGroup || !(await utils.hasGroupAdminRights(sock, ctx.chatId, ctx.send
 await sock.sendMessage(ctx.chatId, { text: `🆔 *ID DO GRUPO*\n\n${ctx.chatId}` });
 },
 'apagar': async (sock, ctx) => {
-if (!ctx.isGroup || !(await utils.hasGroupAdminRights(sock, ctx.chatId, ctx.senderId))) return;
+if (!ctx.isGroup) return sock.sendMessage(ctx.chatId, { text: '❌ Só funciona em grupo.' });
+if (!(await utils.hasGroupAdminRights(sock, ctx.chatId, ctx.senderId))) return sock.sendMessage(ctx.chatId, { text: '❌ Sem permissão para apagar.' });
 const quoted = obterContextInfo(ctx.msg);
 if (!quoted?.stanzaId) return sock.sendMessage(ctx.chatId, { text: '❌ Responde a uma mensagem com .apagar' });
 const rawBotJid = sock.user?.id || '';
 const botJid = rawBotJid.includes(':') ? `${rawBotJid.split(':')[0]}@s.whatsapp.net` : rawBotJid;
-const fromMe = mesmoJid(quoted.participant, botJid) || mesmoJid(quoted.participant, `${CONFIG.botNumber}@s.whatsapp.net`);
+const cached = cacheMensagens.get(quoted.stanzaId);
+const fromMe = !!(quoted.participant && (mesmoJid(quoted.participant, botJid) || mesmoJid(quoted.participant, `${CONFIG.botNumber}@s.whatsapp.net`) || cached?.key?.fromMe));
+const participant = quoted.participant || cached?.key?.participant;
+const keyDelete = { remoteJid: ctx.chatId, fromMe, id: quoted.stanzaId, participant: fromMe ? undefined : participant };
 try {
-await sock.sendMessage(ctx.chatId, { delete: { remoteJid: ctx.chatId, fromMe, id: quoted.stanzaId, participant: fromMe ? undefined : quoted.participant } });
+await sock.sendMessage(ctx.chatId, { delete: keyDelete });
 await utils.reagir(sock, ctx.msg, '✅');
-} catch { await sock.sendMessage(ctx.chatId, { text: '❌ Não consegui apagar.' }); }
+} catch (e1) {
+try {
+await sock.sendMessage(ctx.chatId, { delete: { remoteJid: ctx.chatId, fromMe: false, id: quoted.stanzaId, participant } });
+await utils.reagir(sock, ctx.msg, '✅');
+} catch (e2) {
+console.warn('apagar:', e1.message, e2.message);
+await sock.sendMessage(ctx.chatId, { text: '❌ Não consegui apagar. O bot precisa ser admin do grupo.' });
+}
+}
 },
 'banir': async (sock, ctx) => {
 if (!ctx.isGroup || !(await utils.hasBanRights(sock, ctx.chatId, ctx.senderId))) return;
@@ -3607,8 +3659,14 @@ console.log(`${cyan}╚${'═'.repeat(largura)}╝${reset}\n`);
 // ══════════════════════════════════════════════════════════
 async function processarMensagem(sock, msg) {
 const minhaGeracao = geracaoAtual;
+const stubType = Number(msg.messageStubType || 0);
+if ([27, 31, 50].includes(stubType) && msg.key?.remoteJid?.endsWith('@g.us')) {
+const pessoas = msg.messageStubParameters || [];
+for (const p of pessoas) await enviarBoasVindas(sock, msg.key.remoteJid, p);
+}
 if (!msg.message) return;
 msg.message = unwrapMessageContent(msg.message) || msg.message;
+guardarMensagemCache(msg);
 if (msg.key.fromMe && mensagensEnviadasPeloBot.has(msg.key.id)) {
 mensagensEnviadasPeloBot.delete(msg.key.id);
 return;
@@ -4210,7 +4268,7 @@ sock = makeWASocket({
 version, auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'fatal' })) },
 printQRInTerminal: false, browser: ['Ubuntu', 'Chrome', '20.0.04'],
 logger: pino({ level: 'fatal' }), syncFullHistory: false, markOnlineOnConnect: true,
-getMessage: async () => undefined // ⚡ OPT — evita falhas internas em retries
+getMessage: async (key) => cacheMensagens.get(key?.id)?.message
 });
 const enviarMensagemOriginal = sock.sendMessage.bind(sock);
 sock.sendMessage = async (...args) => {
@@ -4253,20 +4311,10 @@ cacheMetadata.delete(groupId);
 const rawBotJid = sock.user?.id || '';
 const botJid = rawBotJid.includes(':') ? `${rawBotJid.split(':')[0]}@s.whatsapp.net` : rawBotJid;
 const lista = (participants || []).map(idParticipanteEvento).filter(Boolean);
-if (action === 'add') {
-const boasVindasMsg = db.grupos.boasvindas.get(groupId);
-if (boasVindasMsg) {
-try {
-const metadata = await getMetadataCached(sock, groupId);
+if (action === 'add' || action === 'invite') {
 for (const participant of lista) {
-if (mesmoJid(participant, botJid)) continue;
-const nome = `@${String(participant).split('@')[0]}`;
-const textoFinal = boasVindasMsg.replace(/@nome/g, nome).replace(/@grupo/g, metadata.subject || 'Grupo');
-const cartao = await gerarCartaoBoasVindas(sock, participant, groupId);
-if (cartao) await sock.sendMessage(groupId, { image: cartao, caption: textoFinal, mentions: [participant] });
-else await sock.sendMessage(groupId, { text: textoFinal, mentions: [participant] });
-}
-} catch (e) { console.warn('boas-vindas:', e.message); }
+try { await enviarBoasVindas(sock, groupId, participant); }
+catch (e) { console.warn('boas-vindas:', e.message); }
 }
 if (lista.some(p => mesmoJid(p, botJid))) {
 if (!utils.isGroupSubscribed(groupId)) {
@@ -4278,7 +4326,8 @@ setTimeout(() => { sock.groupLeave(groupId).catch(() => {}); }, 3000);
 });
 // ⚡ OPT — mensagens passam pela fila com concorrência limitada
 sock.ev.on('messages.upsert', ({ messages, type }) => {
-if (type !== 'notify' || pausado) return;
+if (pausado) return;
+if (type && type !== 'notify' && type !== 'append') return;
 for (const msg of messages) {
 enfileirarProcessamento(() => processarMensagem(sock, msg));
 }
