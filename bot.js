@@ -393,7 +393,7 @@ ping: '🏓', hora: '🕒', info: '⚡', planos: '💰', statusgrupo: '💎', co
 banir: '🔨', promover: '⬆️', rebaixar: '⬇️', marcartodos: '📢', historico: '📜', fechar: '🔒', abrir: '🔓', link: '🔗', idgrupo: '🆔', apagar: '🗑️',
 antilink: '🔗', proibirpalavra: '📵', desbanirpalavra: '✅', regras: '📜', ia: '🧠', autodelete: '🤖', verregras: '📃', listarpalavras: '📃', boasvindas: '👋',
 figurinha: '🎨', stickertexto: '✏️', infosticker: 'ℹ️', modelo: '🖼️', traduzir: '🌍', recibo: '🧾',
-ativarvip: '💎', removervip: '🚫', removervipuser: '🚫', listargrupos: '📋', avisartodos: '📣', atalho: '⚡', removeratalho: '🗑️', listaratalhos: '⚡',
+ativarvip: '💎', removervip: '🚫', removervipuser: '🚫', listargrupos: '📋', listarusuariosvip: '👤', listarvipusers: '👤', avisartodos: '📣', atalho: '⚡', removeratalho: '🗑️', listaratalhos: '⚡',
 estatisticas: '📊', relatorio: '📊', prefixo: '⚙️', backup: '💾', restaurar: '♻️', desligarbot: '🔴', ligarbot: '🟢',
 ignorar: '🔇', designorar: '🔊', ignorados: '🔇', notificar: '🔔', usocomandos: '📊',
 tiktok: '🎵', instagram: '📸', youtube: '🎬', youtubeaudio: '🎵', youtubevideo: '🎥', baixar: '🌐', facebook: '📘',
@@ -433,8 +433,7 @@ lenda: ['tiktok', 'tiktokaudio', 'instagram', 'facebook', 'baixar', 'fichamidia'
 // ══════════════════════════════════════════════════════════
 // ⚡ OPT — BANCO COM SAVE DEBOUNCED (menos I/O síncrono no event loop)
 // ══════════════════════════════════════════════════════════
-function escreverDados() {
-try {
+function construirSnapshotPersistencia() {
 const data = {
 gruposVIP: Object.fromEntries(db.gruposVIP), grupoDono: Object.fromEntries(db.grupoDono),
 atalhos: Object.fromEntries(db.atalhos), antiLink: Object.fromEntries(db.grupos.antiLink),
@@ -455,21 +454,29 @@ modoInternet: Object.fromEntries(db.modoInternet),
 tabelasPagamento: Object.fromEntries([...db.tabelasPagamento].map(([k, v]) => [k, Array.isArray(v) ? v : [...(v||[])]])),
 pedidosPagamento: Object.fromEntries([...db.pedidosPagamento].map(([k, v]) => [k, v])),
 pedidosPendentes: Object.fromEntries(db.pedidosPendentes),
-// KORTEX KEY SYSTEM — Salvar Keys Random (REGRA 9)
 keysRandom: Object.fromEntries(db.keysRandom)
 };
+return {
+  data,
+  payloadTurso: {
+    ...data,
+    alertasKey: Object.fromEntries(db.alertasKey),
+    historicoGrupos: Object.fromEntries(db.historicoGrupos),
+    groq_model: CONFIG.groq_model || null,
+    atualizadoEm: Date.now()
+  }
+};
+}
+function escreverDados() {
+try {
+const { data, payloadTurso } = construirSnapshotPersistencia();
 fs.writeFileSync(CONFIG.dataFile, JSON.stringify(data, null, 2), 'utf8');
 fs.writeFileSync(CONFIG.historicoFile, JSON.stringify(Object.fromEntries(db.historicoGrupos), null, 2), 'utf8');
-try {
-const payloadTurso = {
-...data,
-alertasKey: Object.fromEntries(db.alertasKey),
-historicoGrupos: Object.fromEntries(db.historicoGrupos),
-groq_model: CONFIG.groq_model || null,
-atualizadoEm: Date.now()
-};
-agendarSyncTurso(payloadTurso);
-} catch {}
+if (turso && payloadTurso) {
+  Promise.resolve(turso.Backup.salvarTudo(payloadTurso)).catch((e) => {
+    console.warn('⚠️ Turso backup falhou:', e && e.message ? e.message : e);
+  });
+}
 if (global.gc) { try { global.gc(); } catch {} }
 } catch (e) { console.error('Erro ao guardar dados:', e.message); }
 }
@@ -478,6 +485,9 @@ function salvarDados() {
 if (_saveTimer) return; // já existe escrita agendada
 _saveTimer = setTimeout(() => { _saveTimer = null; escreverDados(); }, 1500);
 if (_saveTimer.unref) _saveTimer.unref();
+}
+function salvarDadosAgora() {
+  escreverDados();
 }
 // ⚡ OPT — flush garantido no encerramento
 process.on('exit', () => { try { escreverDados(); } catch {} });
@@ -2777,11 +2787,13 @@ const conteudo = `─── 💎 VIPs GRUPO ───
 • ativarvip [nível] [dias] — ativa VIP
 • removervip — remove VIP
 • listargrupos — lista grupos
+• listarusuariosvip — lista users VIP com nomes
 • avisartodos all — avisa todos
 
 ─── 👤 VIPs USER ───
 • vipuser @user [n] [d] — dá VIP
 • removervipuser @user — remove VIP do user
+• listarvipusers — lista users VIP
 • meuvip — vê o teu VIP
 
 ─── 🛠️ SISTEMA ───
@@ -2921,9 +2933,26 @@ await sock.sendMessage(ctx.chatId, { text: '✅ VIP REMOVIDO' });
 if (!utils.isOwner(ctx.senderId)) throw new PermissaoNegada();
 if (!db.gruposVIP.size) return sock.sendMessage(ctx.chatId, { text: '📝 Nenhum grupo activo.' });
 let lista = `⚡ *GRUPOS ACTIVOS*\n\n`;
-for (const [g, s] of db.gruposVIP) lista += `📞 ${g.split('@')[0]}\n${NIVEIS_VIP[s.nivel].nome} • ${Math.floor(Math.max(0, s.expiraEm - Date.now()) / 86400000)}d\n\n`;
+for (const [g, s] of db.gruposVIP) {
+  let nomeGrupo = g.split('@')[0];
+  try { const meta = await sock.groupMetadata(g); if (meta?.subject) nomeGrupo = meta.subject; } catch {}
+  lista += `🏢 ${nomeGrupo}\n📞 ${g.split('@')[0]}\n${NIVEIS_VIP[s.nivel].nome} • ${Math.floor(Math.max(0, s.expiraEm - Date.now()) / 86400000)}d\n\n`;
+}
 await sock.sendMessage(ctx.chatId, { text: lista });
 },
+'listarusuariosvip': async (sock, ctx) => {
+if (!utils.isOwner(ctx.senderId)) throw new PermissaoNegada();
+if (!db.usersVIP.size) return sock.sendMessage(ctx.chatId, { text: '📝 Nenhum usuário VIP activo.' });
+let lista = `⚡ *USUÁRIOS VIP ACTIVOS*\n\n`;
+for (const [userId, s] of db.usersVIP) {
+  let nomeUser = userId.split('@')[0];
+  try { const nome = await sock.getName?.(userId); if (nome && nome.trim()) nomeUser = nome.trim(); } catch {}
+  const nivel = NIVEIS_VIP_USER[s.nivel]?.nome || s.nivel;
+  lista += `👤 ${nomeUser}\n📞 ${userId.split('@')[0]}\n💎 ${nivel} • ${utils.tempoRestante(Math.max(0, s.expiraEm - Date.now()))}\n\n`;
+}
+await sock.sendMessage(ctx.chatId, { text: lista });
+},
+'listarvipusers': async (sock, ctx) => commands.listarusuariosvip(sock, ctx),
 'avisartodos': async (sock, ctx) => {
 if (!utils.isOwner(ctx.senderId)) throw new PermissaoNegada();
 if ((ctx.args[0] || '').toLowerCase() !== 'all') return sock.sendMessage(ctx.chatId, { text: 'Uso: .avisartodos all' });
@@ -2951,6 +2980,7 @@ if (!target || !NIVEIS_VIP_USER[nivel] || !dias) return sock.sendMessage(ctx.cha
 const diasFinais = Math.min(dias, NIVEIS_VIP_USER[nivel].maxDias);
 db.usersVIP.set(target, { nivel, expiraEm: Date.now() + (diasFinais * 86400000), ativadoEm: Date.now() });
 salvarDados();
+salvarDadosAgora();
 await sock.sendMessage(ctx.chatId, { text: `✅ *VIP USER ACTIVADO*\n👤 @${target.split('@')[0]}\n💎 ${NIVEIS_VIP_USER[nivel].nome}\n⏳ ${diasFinais} dias\n🔓 ${NIVEIS_VIP_USER[nivel].cmds.map(c => '.' + c).join(', ')}`, mentions: [target] });
 },
 'removervipuser': async (sock, ctx) => {
@@ -2962,7 +2992,7 @@ if (!target && ctx.args[0]) {
 }
 if (!target) return sock.sendMessage(ctx.chatId, { text: 'Uso: .removervipuser [@user|id]\nEx: .removervipuser @usuario ou .removervipuser 258840000000' });
 if (!db.usersVIP.has(target)) return sock.sendMessage(ctx.chatId, { text: `❌ @${target.split('@')[0]} não tem VIP activo.`, mentions: [target] });
-db.usersVIP.delete(target); salvarDados();
+db.usersVIP.delete(target); salvarDados(); salvarDadosAgora();
 await sock.sendMessage(ctx.chatId, { text: `✅ *VIP USER REMOVIDO*\n👤 @${target.split('@')[0]}`, mentions: [target] });
 },
 'meuvip': async (sock, ctx) => {
@@ -3623,6 +3653,7 @@ if (keyData) {
 keyData.status = 'DESATIVADA';
 db.keysRandom.set(key, keyData);
 salvarDados();
+salvarDadosAgora();
 await sock.sendMessage(chatId, { text: `✅ *KEY DESATIVADA*\n\n🔑 ${key}\n🛡️ Esta Key não pode mais ser utilizada.` });
 }
 db.fluxosKey.delete(chatId);
@@ -3679,6 +3710,7 @@ keyData.status = 'DESATIVADA';
 db.keysRandom.set(keyUsada, keyData);
 }
 salvarDados();
+salvarDadosAgora();
 await sock.sendMessage(chatId, { text: `✅ *VIP REMOVIDO*\n\n👤 @${userId.split('@')[0]}\n👑 ${obterNomeNivel(nivel)}\n🔑 Key invalidada.\n\n🛡️ Operação concluída.`, mentions: [userId] });
 try {
 await sock.sendMessage(userId, { text: `⚠️ *KORTEX SECURITY*\n\nO teu acesso VIP foi revogado pelo dono.\n\n👑 Nível: ${obterNomeNivel(nivel)}\n\nPara mais informações, contacte o dono.` });
