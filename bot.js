@@ -1021,6 +1021,8 @@ resultado += `├─ ${cmdFormatado}${descFormatado}\n`;
 
 return resultado;
 }
+
+async function enviarMenuInterativo(sock, ctx) {
 const p = await commands._getPerms(sock, ctx);
 const nomeUsuario = ctx.senderId ? ctx.senderId.split('@')[0] : 'usuário';
 const nomeBot = CONFIG.botName || 'Kortex';
