@@ -1,4 +1,65 @@
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, makeCacheableSignalKeyStore, downloadMediaMessage } = require('@innovatorssoft/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, makeCacheableSignalKeyStore, downloadMediaMessage } = require('@whiskeysockets/baileys');
+
+// ══════════════════════════════════════════════════════════
+// RENDERIZADOR DE BOTÕES INTERATIVOS — @innovatorssoft/baileys
+// Usado APENAS para construir (renderizar) mensagens interativas.
+// A conexão, sessão, mídia e todos os demais envios usam o Baileys oficial.
+// ══════════════════════════════════════════════════════════
+const inovadorUI = (() => {
+  try { return require('@innovatorssoft/baileys'); } catch (e) { console.warn('⚠️ Renderizador de botões (InnovatorsSoft) indisponível:', e.message); return null; }
+})();
+
+async function enviarMensagemInterativa(sock, jid, content) {
+try {
+if (!inovadorUI || typeof inovadorUI.generateWAMessageFromContent !== 'function') return await sock.sendMessage(jid, content);
+const sections = content?.sections;
+const botoes = content?.buttons;
+let messageContent;
+if (Array.isArray(botoes) && botoes.length) {
+messageContent = { viewOnceMessage: { message: { interactiveMessage: {
+body: { text: content.text || content.caption || '' },
+footer: { text: content.footer || '⚡ KORTEX' },
+nativeFlowMessage: { buttons: botoes.map((b) => ({ name: 'quick_reply', buttonParamsJson: JSON.stringify({ display_text: b?.buttonText?.displayText || String(b), id: b.buttonId }) })) },
+contextInfo: {}
+} } } };
+} else if (Array.isArray(sections) && sections.length) {
+messageContent = { viewOnceMessage: { message: { interactiveMessage: {
+body: { text: content.text || content.caption || '' },
+footer: { text: content.footer || '⚡ KORTEX' },
+nativeFlowMessage: { buttons: [{ name: 'single_select', buttonParamsJson: JSON.stringify({ title: content.buttonText || 'Abrir lista', sections: sections.map((s, i) => ({ title: s.title || `Lista ${i + 1}`, rows: (s.rows || []).map((r) => ({ header: r.title || '', title: r.title || '', description: r.description || '', id: r.rowId })) })) }) }] },
+contextInfo: {}
+} } } };
+} else {
+return await sock.sendMessage(jid, content);
+}
+const renderizada = inovadorUI.generateWAMessageFromContent(jid, messageContent, { userJid: sock?.user?.id || '' });
+if (!renderizada?.message) return await sock.sendMessage(jid, content);
+await sock.relayMessage(jid, renderizada.message, { messageId: renderizada.key?.id });
+return renderizada;
+} catch (e) {
+console.warn('⚠️ Envio interativo (InnovatorsSoft) falhou, usando envio normal do Baileys:', e.message);
+return await sock.sendMessage(jid, content);
+}
+}
+// ══════════════════════════════════════════════════════════
+// ROTEAMENTO — Baileys oficial para tudo; renderizador InnovatorsSoft
+// apenas para mensagens com botões/listas interativas.
+// ══════════════════════════════════════════════════════════
+function kortexCriarSocket(opts) {
+const sock = makeWASocket(opts);
+try {
+const enviarOriginal = sock.sendMessage.bind(sock);
+sock.sendMessage = async (jid, content, options) => {
+if (content && (Array.isArray(content.buttons) && content.buttons.length || Array.isArray(content.sections) && content.sections.length)) {
+try { return await enviarMensagemInterativa({ ...sock, sendMessage: enviarOriginal }, jid, content); }
+catch (e) { console.warn('⚠️ Rota interativa falhou, seguindo com Baileys oficial:', e.message); }
+}
+return await enviarOriginal(jid, content, options);
+};
+} catch (e) { console.warn('⚠️ Hook de botões não aplicado:', e.message); }
+return sock;
+}
+
 require('dotenv').config();
 const Groq = require('groq-sdk');
 const pino = require('pino');
@@ -4264,7 +4325,7 @@ sockAtual = null;
 }
 const { state, saveCreds } = await useMultiFileAuthState('sessao_kortex');
 const { version } = await fetchLatestBaileysVersion();
-sock = makeWASocket({
+sock = kortexCriarSocket({
 version, auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'fatal' })) },
 printQRInTerminal: false, browser: ['Ubuntu', 'Chrome', '20.0.04'],
 logger: pino({ level: 'fatal' }), syncFullHistory: false, markOnlineOnConnect: true,
