@@ -11,28 +11,20 @@ const inovadorUI = (() => {
 
 async function enviarMensagemInterativa(sock, jid, content) {
 try {
-if (!inovadorUI || typeof inovadorUI.generateWAMessageFromContent !== 'function') return await sock.sendMessage(jid, content);
+if (!inovadorUI || typeof inovadorUI.generateWAMessage !== 'function') return await sock.sendMessage(jid, content);
 const sections = content?.sections;
 const botoes = content?.buttons;
-let messageContent;
+let conteudoRenderizado;
 if (Array.isArray(botoes) && botoes.length) {
-messageContent = { viewOnceMessage: { message: { interactiveMessage: {
-body: { text: content.text || content.caption || '' },
-footer: { text: content.footer || '⚡ KORTEX' },
-nativeFlowMessage: { buttons: botoes.map((b) => ({ name: 'quick_reply', buttonParamsJson: JSON.stringify({ display_text: b?.buttonText?.displayText || String(b), id: b.buttonId }) })) },
-contextInfo: {}
-} } } };
+// Atalho nativo da InnovatorsSoft: constrói o interactiveMessage completo com o formato que os clientes esperam
+conteudoRenderizado = { text: content.text || content.caption || '', footer: content.footer || '⚡ KORTEX', nativeFlow: botoes.map((b) => ({ id: b.buttonId, text: b?.buttonText?.displayText || String(b) })) };
 } else if (Array.isArray(sections) && sections.length) {
-messageContent = { viewOnceMessage: { message: { interactiveMessage: {
-body: { text: content.text || content.caption || '' },
-footer: { text: content.footer || '⚡ KORTEX' },
-nativeFlowMessage: { buttons: [{ name: 'single_select', buttonParamsJson: JSON.stringify({ title: content.buttonText || 'Abrir lista', sections: sections.map((s, i) => ({ title: s.title || `Lista ${i + 1}`, rows: (s.rows || []).map((r) => ({ header: r.title || '', title: r.title || '', description: r.description || '', id: r.rowId })) })) }) }] },
-contextInfo: {}
-} } } };
+conteudoRenderizado = { text: content.text || content.caption || '', footer: content.footer || '⚡ KORTEX', nativeFlow: [{ text: content.buttonText || 'Abrir lista', sections: sections.map((s, i) => ({ title: s.title || `Lista ${i + 1}`, rows: (s.rows || []).map((r) => ({ header: r.title || '', title: r.title || '', description: r.description || '', id: r.rowId })) })) }] };
 } else {
 return await sock.sendMessage(jid, content);
 }
-const renderizada = inovadorUI.generateWAMessageFromContent(jid, messageContent, { userJid: sock?.user?.id || '' });
+// Gera a mensagem completa (WebMessageInfo) com o gerador oficial da InnovatorsSoft
+const renderizada = await inovadorUI.generateWAMessage(jid, conteudoRenderizado, { userJid: sock?.user?.id || '' });
 if (!renderizada?.message) return await sock.sendMessage(jid, content);
 await sock.relayMessage(jid, renderizada.message, { messageId: renderizada.key?.id });
 return renderizada;
