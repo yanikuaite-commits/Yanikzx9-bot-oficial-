@@ -20,7 +20,29 @@ const ffmpegPath = require('ffmpeg-static');
 const NodeID3 = require('node-id3');
 if (ffmpegPath) ffmpeg.setFfmpegPath(ffmpegPath);
 
+let turso = null;
+try {
+  turso = require('./tursoHelper');
+  console.log('🟦 Turso carregado');
+} catch (e) {
+  console.warn('⚠️ Turso não carregou:', e.message);
+}
 
+let _tursoSyncTimer = null;
+function agendarSyncTurso(payload) {
+  if (!turso || !payload) return;
+  if (_tursoSyncTimer) clearTimeout(_tursoSyncTimer);
+  _tursoSyncTimer = setTimeout(async () => {
+    _tursoSyncTimer = null;
+    try {
+      await turso.Backup.salvarTudo(payload);
+      console.log('☁️ Backup Turso atualizado');
+    } catch (e) {
+      console.warn('⚠️ Turso backup falhou:', e.message);
+    }
+  }, 5000);
+  if (_tursoSyncTimer.unref) _tursoSyncTimer.unref();
+}
 
 // ══════════════════════════════════════════════════════════
 // ⚡ OPT — ESTABILIDADE GLOBAL (erros isolados não derrubam o processo)
@@ -438,6 +460,16 @@ keysRandom: Object.fromEntries(db.keysRandom)
 };
 fs.writeFileSync(CONFIG.dataFile, JSON.stringify(data, null, 2), 'utf8');
 fs.writeFileSync(CONFIG.historicoFile, JSON.stringify(Object.fromEntries(db.historicoGrupos), null, 2), 'utf8');
+try {
+const payloadTurso = {
+...data,
+alertasKey: Object.fromEntries(db.alertasKey),
+historicoGrupos: Object.fromEntries(db.historicoGrupos),
+groq_model: CONFIG.groq_model || null,
+atualizadoEm: Date.now()
+};
+agendarSyncTurso(payloadTurso);
+} catch {}
 if (global.gc) { try { global.gc(); } catch {} }
 } catch (e) { console.error('Erro ao guardar dados:', e.message); }
 }
@@ -452,6 +484,79 @@ process.on('exit', () => { try { escreverDados(); } catch {} });
 process.on('SIGINT', () => { try { escreverDados(); } catch {} process.exit(0); });
 process.on('SIGTERM', () => { try { escreverDados(); } catch {} process.exit(0); });
 
+function aplicarBackupTurso(data) {
+  try {
+    if (!data || typeof data !== 'object') return false;
+
+    db.gruposVIP.clear();
+    db.grupoDono.clear();
+    db.atalhos.clear();
+    db.grupos.antiLink.clear();
+    db.grupos.palavrasBanidas.clear();
+    db.grupos.boasvindas.clear();
+    db.grupos.regras.clear();
+    db.grupos.banidos.clear();
+    db.grupos.iaAtivo.clear();
+    db.grupos.desligados.clear();
+    db.ignorados.clear();
+    db.whitelist.clear();
+    db.autoDelete.clear();
+    db.indicadores.clear();
+    db.stats.clear();
+    db.notifications.clear();
+    db.usersVIP.clear();
+    db.grupos.comandosDesativados.clear();
+    db.warns.clear();
+    db.mutados.clear();
+    db.grupos.semPrefixo.clear();
+    db.grupos.antiMidia.clear();
+    db.modoInternet.clear();
+    db.tabelasPagamento.clear();
+    db.pedidosPagamento.clear();
+    db.pedidosPendentes.clear();
+    db.keysRandom.clear();
+    db.historicoGrupos.clear();
+    db.alertasKey.clear();
+    agendamentos.clear();
+
+    if (data.gruposVIP) for (const [k, v] of Object.entries(data.gruposVIP)) db.gruposVIP.set(k, v);
+    if (data.grupoDono) for (const [k, v] of Object.entries(data.grupoDono)) db.grupoDono.set(k, v);
+    if (data.atalhos) for (const [k, v] of Object.entries(data.atalhos)) db.atalhos.set(k, v);
+    if (data.antiLink) for (const [k, v] of Object.entries(data.antiLink)) db.grupos.antiLink.set(k, v);
+    if (data.palavrasBanidas) for (const [k, v] of Object.entries(data.palavrasBanidas)) db.grupos.palavrasBanidas.set(k, v);
+    if (data.boasvindas) for (const [k, v] of Object.entries(data.boasvindas)) db.grupos.boasvindas.set(k, v);
+    if (data.regras) for (const [k, v] of Object.entries(data.regras)) db.grupos.regras.set(k, v);
+    if (data.banidos) for (const [k, v] of Object.entries(data.banidos)) db.grupos.banidos.set(k, v);
+    if (data.iaAtivo) for (const id of data.iaAtivo) db.grupos.iaAtivo.add(id);
+    if (data.desligados) for (const id of data.desligados) db.grupos.desligados.add(id);
+    if (data.ignorados) for (const id of data.ignorados) db.ignorados.add(id);
+    if (data.whitelist) for (const [k, v] of Object.entries(data.whitelist)) db.whitelist.set(k, new Set(v));
+    if (data.autoDelete) for (const [k, v] of Object.entries(data.autoDelete)) db.autoDelete.set(k, v);
+    if (data.indicadores) for (const [k, v] of Object.entries(data.indicadores)) db.indicadores.set(k, v);
+    if (data.stats) for (const [k, v] of Object.entries(data.stats)) db.stats.set(k, v);
+    if (data.notifications) for (const [k, v] of Object.entries(data.notifications)) db.notifications.set(k, v);
+    if (data.prefixo) CONFIG.prefix = data.prefixo;
+    if (data.usersVIP) for (const [k, v] of Object.entries(data.usersVIP)) db.usersVIP.set(k, v);
+    if (data.comandosDesativados) for (const [k, v] of Object.entries(data.comandosDesativados)) db.grupos.comandosDesativados.set(k, new Set(v));
+    if (data.warns) for (const [k, v] of Object.entries(data.warns)) db.warns.set(k, new Map(Object.entries(v)));
+    if (data.mutados) for (const [k, v] of Object.entries(data.mutados)) db.mutados.set(k, new Map(Object.entries(v)));
+    if (data.semPrefixo) for (const id of data.semPrefixo) db.grupos.semPrefixo.add(id);
+    if (data.antiMidia) for (const [k, v] of Object.entries(data.antiMidia)) db.grupos.antiMidia.set(k, new Set(v));
+    if (data.agendamentos) for (const [k, v] of Object.entries(data.agendamentos)) agendamentos.set(k, v);
+    if (data.modoInternet) for (const [k, v] of Object.entries(data.modoInternet)) db.modoInternet.set(k, !!v);
+    if (data.tabelasPagamento) for (const [k, v] of Object.entries(data.tabelasPagamento)) db.tabelasPagamento.set(k, Array.isArray(v) ? v : []);
+    if (data.pedidosPagamento) for (const [k, v] of Object.entries(data.pedidosPagamento)) db.pedidosPagamento.set(k, v);
+    if (data.pedidosPendentes) for (const [k, v] of Object.entries(data.pedidosPendentes)) db.pedidosPendentes.set(k, v);
+    if (data.keysRandom) for (const [k, v] of Object.entries(data.keysRandom)) db.keysRandom.set(k, v);
+    if (data.historicoGrupos) for (const [k, v] of Object.entries(data.historicoGrupos)) db.historicoGrupos.set(k, Array.isArray(v) ? v : []);
+    if (data.alertasKey) for (const [k, v] of Object.entries(data.alertasKey)) db.alertasKey.set(k, v);
+    if (data.groq_model) CONFIG.groq_model = data.groq_model;
+    return true;
+  } catch (e) {
+    console.warn('⚠️ Erro ao aplicar backup Turso:', e.message);
+    return false;
+  }
+}
 
 function carregarDados() {
 try {
@@ -4112,6 +4217,38 @@ setTimeout(startBot, delay);
 }
 }
 
-startBot().catch(console.error);
+async function iniciarKortexComTurso() {
+  console.log('🚀 Iniciando ' + CONFIG.botName + '...');
+  console.log('👤 Criado por: ' + CONFIG.creator);
 
-module.exports = { CONFIG, db, commands, utils, startBot };
+  try {
+    if (turso) {
+      const backup = await turso.Backup.carregarTudo();
+      if (backup && Object.keys(backup).length > 0) {
+        let usarTurso = true;
+        try {
+          if (fs.existsSync(CONFIG.dataFile) && backup.atualizadoEm) {
+            const horaLocal = fs.statSync(CONFIG.dataFile).mtimeMs;
+            if (backup.atualizadoEm < horaLocal) usarTurso = false;
+          }
+        } catch {}
+
+        if (usarTurso) {
+          const restaurado = aplicarBackupTurso(backup);
+          if (restaurado) console.log('☁️ Backup Turso restaurado com sucesso');
+          else console.warn('⚠️ Backup Turso inválido ou não foi aplicado');
+        } else {
+          console.log('💾 Arquivo local mais recente; Turso ignorado');
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('⚠️ Falha ao restaurar Turso:', e.message);
+  }
+
+  await startBot();
+}
+
+iniciarKortexComTurso().catch(console.error);
+
+module.exports = { CONFIG, db, commands, utils, startBot, iniciarKortexComTurso };
