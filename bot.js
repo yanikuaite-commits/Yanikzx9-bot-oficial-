@@ -658,35 +658,35 @@ if (utils.isOwner(senderId)) return true;
 if (!utils.isGroupSubscribed(groupId)) return false;
 if (!(await utils.isSenderGroupAdmin(sock, groupId, senderId))) return false;
 const sub = utils.getGroupSubscription(groupId);
-return sub ? NIVEIS_VIP[sub.nivel].ban : false;
+return sub ? !!NIVEIS_VIP[sub.nivel]?.ban : false;
 },
 hasPromoteRights: async (sock, groupId, senderId) => {
 if (utils.isOwner(senderId)) return true;
 if (!utils.isGroupSubscribed(groupId)) return false;
 if (!(await utils.isSenderGroupAdmin(sock, groupId, senderId))) return false;
 const sub = utils.getGroupSubscription(groupId);
-return sub ? NIVEIS_VIP[sub.nivel].promote : false;
+return sub ? !!NIVEIS_VIP[sub.nivel]?.promote : false;
 },
 hasRulesRights: async (sock, groupId, senderId) => {
 if (utils.isOwner(senderId)) return true;
 if (!utils.isGroupSubscribed(groupId)) return false;
 if (!(await utils.isSenderGroupAdmin(sock, groupId, senderId))) return false;
 const sub = utils.getGroupSubscription(groupId);
-return sub ? NIVEIS_VIP[sub.nivel].rules : false;
+return sub ? !!NIVEIS_VIP[sub.nivel]?.rules : false;
 },
 hasAntiRights: async (sock, groupId, senderId) => {
 if (utils.isOwner(senderId)) return true;
 if (!utils.isGroupSubscribed(groupId)) return false;
 if (!(await utils.isSenderGroupAdmin(sock, groupId, senderId))) return false;
 const sub = utils.getGroupSubscription(groupId);
-return sub ? NIVEIS_VIP[sub.nivel].anti : false;
+return sub ? !!NIVEIS_VIP[sub.nivel]?.anti : false;
 },
 hasBoasvindasRights: async (sock, groupId, senderId) => {
 if (utils.isOwner(senderId)) return true;
 if (!utils.isGroupSubscribed(groupId)) return false;
 if (!(await utils.isSenderGroupAdmin(sock, groupId, senderId))) return false;
 const sub = utils.getGroupSubscription(groupId);
-return sub ? NIVEIS_VIP[sub.nivel].boasvindas : false;
+return sub ? !!NIVEIS_VIP[sub.nivel]?.boasvindas : false;
 },
 hasStickerRights: async (sock, groupId, senderId) => {
 if (utils.isOwner(senderId)) return true;
