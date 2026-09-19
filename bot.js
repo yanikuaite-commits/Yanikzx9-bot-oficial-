@@ -183,7 +183,50 @@ if (!byUser.size) db.mediaSpamMonitor.delete(chatId);
 }
 }, 30000);
 
-const REGEX_URL = /(https?:\/\/[^\s]+)/g;
+const REGEX_URL = /(?:https?:\/\/|www\.)[^\s<>"']+|wa\.me\/[^\s<>"']+|chat\.whatsapp\.com\/[^\s<>"']+|\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:com|net|org|io|app|xyz|me|co|link|info|biz|tv|gg|ly|pt|br|uk)(?:\/[^\s<>"']*)?/gi;
+
+function unwrapMessageContent(message) {
+if (!message || typeof message !== 'object') return message;
+let m = message;
+for (let i = 0; i < 6; i++) {
+if (m.ephemeralMessage?.message) m = m.ephemeralMessage.message;
+else if (m.viewOnceMessage?.message) m = m.viewOnceMessage.message;
+else if (m.viewOnceMessageV2?.message) m = m.viewOnceMessageV2.message;
+else if (m.viewOnceMessageV2Extension?.message) m = m.viewOnceMessageV2Extension.message;
+else if (m.documentWithCaptionMessage?.message) m = m.documentWithCaptionMessage.message;
+else if (m.editedMessage?.message) m = m.editedMessage.message;
+else if (m.lottieStickerMessage?.message) m = m.lottieStickerMessage.message;
+else break;
+}
+return m;
+}
+
+function obterContextInfo(msg) {
+const m = unwrapMessageContent(msg?.message) || {};
+return m.extendedTextMessage?.contextInfo
+|| m.imageMessage?.contextInfo
+|| m.videoMessage?.contextInfo
+|| m.documentMessage?.contextInfo
+|| m.stickerMessage?.contextInfo
+|| m.audioMessage?.contextInfo
+|| m.buttonsResponseMessage?.contextInfo
+|| m.listResponseMessage?.contextInfo
+|| m.templateButtonReplyMessage?.contextInfo
+|| m.buttonsMessage?.contextInfo
+|| {};
+}
+
+function idParticipanteEvento(p) {
+if (!p) return '';
+if (typeof p === 'string') return p;
+return p.id || p.jid || p.lid || p.phoneNumber || '';
+}
+
+function mesmoJid(a, b) {
+const na = String(a || '').split(':')[0].split('@')[0];
+const nb = String(b || '').split(':')[0].split('@')[0];
+return !!(na && nb && na === nb);
+}
 async function getMetadataCached(sock, groupId) {
 const agora = Date.now();
 const c = cacheMetadata.get(groupId);
@@ -696,18 +739,22 @@ return sub ? !!NIVEIS_VIP[sub.nivel]?.sticker : false;
 },
 extractText: (msg) => {
 try {
-const nativeFlow = msg.message?.interactiveResponseMessage?.nativeFlowResponseMessage;
+const m = unwrapMessageContent(msg.message) || {};
+const nativeFlow = m.interactiveResponseMessage?.nativeFlowResponseMessage;
 if (nativeFlow?.paramsJson) { try { const p = JSON.parse(nativeFlow.paramsJson); if (p?.id) return p.id; } catch {} }
-const botaoId = msg.message?.buttonsResponseMessage?.selectedButtonId || msg.message?.templateButtonReplyMessage?.selectedId;
+const botaoId = m.buttonsResponseMessage?.selectedButtonId || m.templateButtonReplyMessage?.selectedId;
 if (botaoId) return botaoId;
-const listaId = msg.message?.listResponseMessage?.singleSelectReply?.selectedRowId;
+const listaId = m.listResponseMessage?.singleSelectReply?.selectedRowId;
 if (listaId) return listaId;
-return msg.message?.conversation || msg.message?.extendedTextMessage?.text || msg.message?.imageMessage?.caption || msg.message?.videoMessage?.caption || msg.message?.documentMessage?.caption || "";
+const convite = m.groupInviteMessage?.inviteCode;
+if (convite) return `https://chat.whatsapp.com/${convite}`;
+const btnUrl = m.buttonsMessage?.contentText || m.templateMessage?.hydratedTemplate?.hydratedContentText || '';
+return m.conversation || m.extendedTextMessage?.text || m.imageMessage?.caption || m.videoMessage?.caption || m.documentMessage?.caption || m.buttonsMessage?.text || btnUrl || "";
 } catch { return ""; }
 },
 getQuotedMention: (msg) => {
 try {
-const ctx = msg?.message?.extendedTextMessage?.contextInfo || msg?.message?.buttonsResponseMessage?.contextInfo || msg?.message?.listResponseMessage?.contextInfo || msg?.message?.templateButtonReplyMessage?.contextInfo || {};
+const ctx = obterContextInfo(msg);
 const mentioned = ctx.mentionedJid || [];
 if (mentioned.length) return mentioned[0];
 const participant = ctx.participant || ctx.remoteJid || msg?.key?.participant || msg?.participant;
@@ -717,7 +764,7 @@ return null;
 },
 getMentions: (msg) => {
 try {
-const ctx = msg?.message?.extendedTextMessage?.contextInfo || msg?.message?.buttonsResponseMessage?.contextInfo || msg?.message?.listResponseMessage?.contextInfo || msg?.message?.templateButtonReplyMessage?.contextInfo || {};
+const ctx = obterContextInfo(msg);
 const arr = [...(ctx.mentionedJid || [])];
 const participant = ctx.participant || ctx.remoteJid || msg?.key?.participant || msg?.participant;
 if (participant && !arr.includes(participant)) arr.push(participant);
@@ -883,47 +930,50 @@ return resposta;
 
 async function gerarCartaoBoasVindas(sock, participant, groupId = null) {
 try {
+const jid = idParticipanteEvento(participant);
 const grupoNome = groupId ? (await getMetadataCached(sock, groupId).catch(() => null))?.subject || 'Grupo' : 'Grupo';
-const nomeUsuario = participant.split('@')[0] || 'Usuário';
-const svg = `
-<svg width="1200" height="700" xmlns="http://www.w3.org/2000/svg">
-  <defs>
-    <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
-      <stop offset="0%" stop-color="#111827"/>
-      <stop offset="50%" stop-color="#1f2937"/>
-      <stop offset="100%" stop-color="#0f172a"/>
-    </linearGradient>
-    <linearGradient id="accent" x1="0" x2="1" y1="0" y2="0">
-      <stop offset="0%" stop-color="#38bdf8"/>
-      <stop offset="100%" stop-color="#a78bfa"/>
-    </linearGradient>
-  </defs>
-  <rect width="1200" height="700" fill="url(#bg)"/>
-  <circle cx="980" cy="120" r="200" fill="#ffffff" opacity="0.06"/>
-  <circle cx="980" cy="620" r="220" fill="#34d399" opacity="0.08"/>
-  <rect x="70" y="70" width="400" height="560" rx="36" fill="rgba(15,23,42,0.68)" stroke="rgba(255,255,255,0.1)"/>
-  <text x="90" y="140" font-size="46" fill="#e2e8f0" font-family="Arial, sans-serif" font-weight="700">Bem-vindo(a)</text>
-  <text x="90" y="260" font-size="72" fill="#ffffff" font-family="Arial, sans-serif" font-weight="700">@${String(nomeUsuario).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</text>
-  <text x="90" y="340" font-size="34" fill="#a5f3fc" font-family="Arial, sans-serif">ao grupo</text>
-  <text x="90" y="430" font-size="52" fill="#fbbf24" font-family="Arial, sans-serif" font-weight="700">${String(grupoNome).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</text>
-  <text x="90" y="520" font-size="28" fill="#d1d5db" font-family="Arial, sans-serif">Kortex ⚡ • Proteção + VIP</text>
-  <rect x="90" y="560" width="200" height="10" rx="5" fill="url(#accent)"/>
-  <g transform="translate(750 120)">
-    <circle cx="120" cy="120" r="120" fill="rgba(255,255,255,0.1)"/>
-    <circle cx="120" cy="120" r="100" fill="#0f172a"/>
-  </g>
+const nomeUsuario = String(jid).split('@')[0] || 'Usuario';
+const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+const svg = `<svg width="1200" height="700" xmlns="http://www.w3.org/2000/svg">
+<defs>
+<linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
+<stop offset="0%" stop-color="#111827"/>
+<stop offset="50%" stop-color="#1f2937"/>
+<stop offset="100%" stop-color="#0f172a"/>
+</linearGradient>
+<linearGradient id="accent" x1="0" x2="1" y1="0" y2="0">
+<stop offset="0%" stop-color="#38bdf8"/>
+<stop offset="100%" stop-color="#a78bfa"/>
+</linearGradient>
+</defs>
+<rect width="1200" height="700" fill="url(#bg)"/>
+<circle cx="980" cy="120" r="200" fill="#ffffff" opacity="0.06"/>
+<circle cx="980" cy="620" r="220" fill="#34d399" opacity="0.08"/>
+<rect x="70" y="70" width="400" height="560" rx="36" fill="#0f172a" opacity="0.68" stroke="#ffffff" stroke-opacity="0.1"/>
+<text x="90" y="140" font-size="46" fill="#e2e8f0" font-family="Arial, sans-serif" font-weight="700">Bem-vindo(a)</text>
+<text x="90" y="260" font-size="48" fill="#ffffff" font-family="Arial, sans-serif" font-weight="700">@${esc(nomeUsuario).slice(0, 22)}</text>
+<text x="90" y="340" font-size="34" fill="#a5f3fc" font-family="Arial, sans-serif">ao grupo</text>
+<text x="90" y="430" font-size="36" fill="#fbbf24" font-family="Arial, sans-serif" font-weight="700">${esc(grupoNome).slice(0, 28)}</text>
+<text x="90" y="520" font-size="28" fill="#d1d5db" font-family="Arial, sans-serif">Kortex - Protecao + VIP</text>
+<rect x="90" y="560" width="200" height="10" rx="5" fill="url(#accent)"/>
+<circle cx="870" cy="240" r="120" fill="#ffffff" opacity="0.1"/>
+<circle cx="870" cy="240" r="100" fill="#0f172a"/>
 </svg>`;
 let base = await sharp(Buffer.from(svg)).png().toBuffer();
 try {
-const ppUrl = await sock.profilePictureUrl(participant, 'image');
+const ppUrl = await sock.profilePictureUrl(jid, 'image').catch(() => null);
 if (ppUrl) {
 const resp = await axios.get(ppUrl, { responseType: 'arraybuffer', timeout: 5000 });
-const avatar = await sharp(Buffer.from(resp.data)).resize(200, 200, { fit: 'cover' }).composite([{ input: Buffer.from(`<svg width="200" height="200"><circle cx="100" cy="100" r="100" fill="white"/></svg>`), blend: 'dest-in' }]).png().toBuffer();
-base = await sharp(base).composite([{ input: avatar, top: 120, left: 740 }]).png().toBuffer();
+const mask = Buffer.from('<svg width="200" height="200"><circle cx="100" cy="100" r="100" fill="white"/></svg>');
+const avatar = await sharp(Buffer.from(resp.data)).resize(200, 200, { fit: 'cover' }).composite([{ input: mask, blend: 'dest-in' }]).png().toBuffer();
+base = await sharp(base).composite([{ input: avatar, top: 140, left: 770 }]).png().toBuffer();
 }
 } catch {}
 return base;
-} catch { return null; }
+} catch (e) {
+console.warn('Cartao boas-vindas:', e.message);
+return null;
+}
 }
 
 async function gerarBlocosRelatorio(sock) {
@@ -2136,10 +2186,15 @@ await sock.sendMessage(ctx.chatId, { text: `🆔 *ID DO GRUPO*\n\n${ctx.chatId}`
 },
 'apagar': async (sock, ctx) => {
 if (!ctx.isGroup || !(await utils.hasGroupAdminRights(sock, ctx.chatId, ctx.senderId))) return;
-const quoted = ctx.msg.message?.extendedTextMessage?.contextInfo;
+const quoted = obterContextInfo(ctx.msg);
 if (!quoted?.stanzaId) return sock.sendMessage(ctx.chatId, { text: '❌ Responde a uma mensagem com .apagar' });
-try { await sock.sendMessage(ctx.chatId, { delete: { remoteJid: ctx.chatId, id: quoted.stanzaId, participant: quoted.participant } }); await utils.reagir(sock, ctx.msg, '✅'); }
-catch { await sock.sendMessage(ctx.chatId, { text: '❌ Não consegui apagar.' }); }
+const rawBotJid = sock.user?.id || '';
+const botJid = rawBotJid.includes(':') ? `${rawBotJid.split(':')[0]}@s.whatsapp.net` : rawBotJid;
+const fromMe = mesmoJid(quoted.participant, botJid) || mesmoJid(quoted.participant, `${CONFIG.botNumber}@s.whatsapp.net`);
+try {
+await sock.sendMessage(ctx.chatId, { delete: { remoteJid: ctx.chatId, fromMe, id: quoted.stanzaId, participant: fromMe ? undefined : quoted.participant } });
+await utils.reagir(sock, ctx.msg, '✅');
+} catch { await sock.sendMessage(ctx.chatId, { text: '❌ Não consegui apagar.' }); }
 },
 'banir': async (sock, ctx) => {
 if (!ctx.isGroup || !(await utils.hasBanRights(sock, ctx.chatId, ctx.senderId))) return;
@@ -2371,14 +2426,14 @@ if (!sub) return sock.sendMessage(ctx.chatId, { text: 'Uso: .antilink [ban|kick|
 if (sub === 'off') { db.grupos.antiLink.delete(ctx.chatId); salvarDados(); return sock.sendMessage(ctx.chatId, { text: '🔗 Anti-link OFF' }); }
 if (sub === 'add') {
 const d = ctx.args[1]; if (!d) return;
-const host = d.replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0];
+const host = d.replace(/^https?:\/\//i, '').replace(/^www\./i, '').split('/')[0].toLowerCase();
 if (!db.whitelist.has(ctx.chatId)) db.whitelist.set(ctx.chatId, new Set());
 db.whitelist.get(ctx.chatId).add(host); salvarDados();
 return sock.sendMessage(ctx.chatId, { text: `✅ ${host} permitido` });
 }
 if (sub === 'remove') {
 const d = ctx.args[1]; if (!d) return;
-const host = d.replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0];
+const host = d.replace(/^https?:\/\//i, '').replace(/^www\./i, '').split('/')[0].toLowerCase();
 const s = db.whitelist.get(ctx.chatId);
 if (s && s.has(host)) { s.delete(host); salvarDados(); return sock.sendMessage(ctx.chatId, { text: `✅ ${host} removido` }); }
 return sock.sendMessage(ctx.chatId, { text: '⚠️ Não estava na whitelist' });
@@ -3329,6 +3384,117 @@ await sock.sendMessage(chatId, { text: `🚫 *REMOVIDO POR LINK*\n@${senderId.sp
 }
 }
 
+function hostDeLink(link) {
+try {
+const u = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(link) ? link : 'http://' + link);
+return u.hostname.replace(/^www\./i, '').toLowerCase();
+} catch { return ''; }
+}
+
+async function aplicarProtecoesGrupo(sock, chatId, msg, senderId, fullText) {
+const isAdmin = await utils.isSenderGroupAdmin(sock, chatId, senderId);
+if (isAdmin || utils.isOwner(senderId)) return false;
+const mut = db.mutados.get(chatId)?.get(senderId);
+if (mut) {
+if (mut > Date.now()) { try { await sock.sendMessage(chatId, { delete: msg.key }); } catch {} return true; }
+db.mutados.get(chatId).delete(senderId); salvarDados();
+}
+const antiLinkMode = db.grupos.antiLink.get(chatId);
+if (antiLinkMode && fullText) {
+const links = [...(fullText.match(new RegExp(REGEX_URL.source, 'gi')) || [])];
+const lowerText = fullText.toLowerCase();
+const hasLink = links.length > 0 || lowerText.includes('wa.me/') || lowerText.includes('chat.whatsapp.com');
+if (hasLink) {
+const whitelist = new Set([...(db.whitelist.get(chatId) || [])].map(x => String(x).toLowerCase()));
+const hosts = links.map(hostDeLink).filter(Boolean);
+const todosPermitidos = hosts.length > 0 && hosts.every(h => whitelist.has(h));
+if (!todosPermitidos) { await executarAntiLink(sock, chatId, msg, senderId, antiLinkMode); return true; }
+}
+}
+const m = unwrapMessageContent(msg.message) || msg.message || {};
+const mediaKeys = ['imageMessage', 'videoMessage', 'documentMessage', 'stickerMessage'];
+const ehMidia = mediaKeys.some(key => !!m[key]);
+if (ehMidia) {
+const mediaSpam = db.mediaSpamMonitor.get(chatId) || new Map();
+const infoMedia = mediaSpam.get(senderId) || { count: 0, first: Date.now(), last: Date.now() };
+const agoraMedia = Date.now();
+if (agoraMedia - infoMedia.first > 10000) {
+infoMedia.count = 0;
+infoMedia.first = agoraMedia;
+}
+infoMedia.count += 1;
+infoMedia.last = agoraMedia;
+mediaSpam.set(senderId, infoMedia);
+db.mediaSpamMonitor.set(chatId, mediaSpam);
+if (infoMedia.count >= 3) {
+try { await sock.sendMessage(chatId, { delete: msg.key }); } catch {}
+if (!db.warns.has(chatId)) db.warns.set(chatId, new Map());
+const warnAtual = db.warns.get(chatId).get(senderId) || 0;
+const warnNovo = warnAtual + 1;
+db.warns.get(chatId).set(senderId, warnNovo);
+salvarDados();
+await sock.sendMessage(chatId, { text: `⚠️ *FALTA DE MÍDIA EM MASSA*\n@${senderId.split('@')[0]}\nVárias imagens/vídeos/documentos em < 10s.\nAdvertência: ${warnNovo}/3`, mentions: [senderId] });
+if (warnNovo >= 3) {
+try { await sock.groupParticipantsUpdate(chatId, [senderId], 'remove'); } catch {}
+try { await sock.sendMessage(chatId, { text: `🚫 @${senderId.split('@')[0]} foi removido por envio em massa de mídia.`, mentions: [senderId] }); } catch {}
+}
+return true;
+}
+}
+if (fullText) {
+const spam = db.spamMonitor.get(chatId) || new Map();
+const infoSpam = spam.get(senderId) || { count: 0, first: Date.now(), last: Date.now() };
+const agoraSpam = Date.now();
+if (agoraSpam - infoSpam.first > 5000) {
+infoSpam.count = 0;
+infoSpam.first = agoraSpam;
+}
+infoSpam.count += 1;
+infoSpam.last = agoraSpam;
+spam.set(senderId, infoSpam);
+db.spamMonitor.set(chatId, spam);
+if (infoSpam.count >= 3) {
+try { await sock.sendMessage(chatId, { delete: msg.key }); } catch {}
+if (!db.warns.has(chatId)) db.warns.set(chatId, new Map());
+const warnAtual = db.warns.get(chatId).get(senderId) || 0;
+const warnNovo = warnAtual + 1;
+db.warns.get(chatId).set(senderId, warnNovo);
+salvarDados();
+await sock.sendMessage(chatId, { text: `⚠️ *FLOOD/SPAM DETECTADO*\n@${senderId.split('@')[0]}\nMensagens em massa em < 5s.\nAdvertência: ${warnNovo}/3`, mentions: [senderId] });
+if (warnNovo >= 3) {
+try { await sock.groupParticipantsUpdate(chatId, [senderId], 'remove'); } catch {}
+try { await sock.sendMessage(chatId, { text: `🚫 @${senderId.split('@')[0]} foi removido por excesso de spam.`, mentions: [senderId] }); } catch {}
+}
+return true;
+}
+const palavrasBanidas = db.grupos.palavrasBanidas.get(chatId) || [];
+for (const palavra of palavrasBanidas) {
+if (fullText.toLowerCase().includes(palavra)) {
+try { await sock.sendMessage(chatId, { delete: msg.key }); } catch {}
+await sock.sendMessage(chatId, { text: `🚫 *PALAVRA PROIBIDA*\n@${senderId.split('@')[0]}`, mentions: [senderId] });
+return true;
+}
+}
+}
+const bloqueios = db.grupos.antiMidia.get(chatId);
+if (bloqueios && bloqueios.size > 0) {
+let tipo = null;
+if (m.audioMessage) tipo = 'audio';
+else if (m.videoMessage) tipo = 'video';
+else if (m.imageMessage) tipo = 'imagem';
+else if (m.documentMessage) tipo = 'documento';
+else if (m.stickerMessage) tipo = 'sticker';
+else if (m.productMessage) tipo = 'produto';
+else if (m.orderMessage || m.paymentMessage) tipo = 'pagamento';
+if (tipo && bloqueios.has(tipo)) {
+try { await sock.sendMessage(chatId, { delete: msg.key }); } catch {}
+await sock.sendMessage(chatId, { text: `🛡️ *${tipo.toUpperCase()} BLOQUEADO*\n@${senderId.split('@')[0]}`, mentions: [senderId] });
+return true;
+}
+}
+return false;
+}
+
 // ══════════════════════════════════════════════════════════
 // ⚡ OPT — HOOK: ao enviar o alerta de segurança, abre o fluxo
 // "fui eu / remover acesso" no PV do dono (REGRA 10-12)
@@ -3442,6 +3608,7 @@ console.log(`${cyan}╚${'═'.repeat(largura)}╝${reset}\n`);
 async function processarMensagem(sock, msg) {
 const minhaGeracao = geracaoAtual;
 if (!msg.message) return;
+msg.message = unwrapMessageContent(msg.message) || msg.message;
 if (msg.key.fromMe && mensagensEnviadasPeloBot.has(msg.key.id)) {
 mensagensEnviadasPeloBot.delete(msg.key.id);
 return;
@@ -3460,6 +3627,7 @@ const fullText = utils.extractText(msg);
 if (msg.key.id) { ultimasMensagensIds.push(msg.key.id); if (ultimasMensagensIds.length > 4) ultimasMensagensIds.shift(); }
 if (!isGroup) console.log(`📩 PV de ${senderId.split('@')[0]}: "${fullText}"`);
 try { await sock.readMessages([msg.key]); } catch {}
+if (isGroup && await aplicarProtecoesGrupo(sock, chatId, msg, senderId, fullText)) return;
 await new Promise(resolve => setTimeout(resolve, 1000 + Math.floor(Math.random() * 2000)));
 if (pausado || minhaGeracao !== geracaoAtual) return;
 if (db.ignorados.has(senderId) && !utils.isOwner(senderId)) return;
@@ -3841,114 +4009,6 @@ return;
 }
 
 // ══════════════════════════════════════════════════════════
-// PROTEÇÕES DE GRUPO
-// ══════════════════════════════════════════════════════════
-if (isGroup && fullText) {
-const isAdmin = await utils.isSenderGroupAdmin(sock, chatId, senderId);
-const isOwner = utils.isOwner(senderId);
-if (!isAdmin && !isOwner) {
-const mut = db.mutados.get(chatId)?.get(senderId);
-if (mut) {
-if (mut > Date.now()) { try { await sock.sendMessage(chatId, { delete: msg.key }); } catch {} return; }
-db.mutados.get(chatId).delete(senderId); salvarDados();
-}
-const antiLinkMode = db.grupos.antiLink.get(chatId);
-if (antiLinkMode) {
-const links = [...(fullText.match(REGEX_URL) || [])];
-const lowerText = fullText.toLowerCase();
-const hasLink = links.length > 0 || lowerText.includes('wa.me/') || lowerText.includes('chat.whatsapp.com');
-if (hasLink) {
-let ignore = false;
-const whitelist = db.whitelist.get(chatId) || new Set();
-for (const link of links) {
-try { const u = new URL(link.startsWith('http') ? link : 'http://' + link); if (whitelist.has(u.hostname.replace(/^www\./, ''))) { ignore = true; break; } } catch {}
-}
-if (!ignore) { await executarAntiLink(sock, chatId, msg, senderId, antiLinkMode); return; }
-}
-}
-const mediaKeys = ['imageMessage', 'videoMessage', 'documentMessage', 'stickerMessage'];
-const ehMidia = !!mediaKeys.find(key => !!msg.message?.[key]);
-if (ehMidia) {
-const mediaSpam = db.mediaSpamMonitor.get(chatId) || new Map();
-const infoMedia = mediaSpam.get(senderId) || { count: 0, first: Date.now(), last: Date.now() };
-const agoraMedia = Date.now();
-if (agoraMedia - infoMedia.first > 10000) {
-infoMedia.count = 0;
-infoMedia.first = agoraMedia;
-}
-infoMedia.count += 1;
-infoMedia.last = agoraMedia;
-mediaSpam.set(senderId, infoMedia);
-db.mediaSpamMonitor.set(chatId, mediaSpam);
-if (infoMedia.count >= 3) {
-try { await sock.sendMessage(chatId, { delete: msg.key }); } catch {}
-if (!db.warns.has(chatId)) db.warns.set(chatId, new Map());
-const warnAtual = db.warns.get(chatId).get(senderId) || 0;
-const warnNovo = warnAtual + 1;
-db.warns.get(chatId).set(senderId, warnNovo);
-salvarDados();
-await sock.sendMessage(chatId, { text: `⚠️ *FALTA DE MÍDIA EM MASSA*\n@${senderId.split('@')[0]}\nVárias imagens/vídeos/documentos em < 10s.\nAdvertência: ${warnNovo}/3`, mentions: [senderId] });
-if (warnNovo >= 3) {
-try { await sock.groupParticipantsUpdate(chatId, [senderId], 'remove'); } catch {}
-try { await sock.sendMessage(chatId, { text: `🚫 @${senderId.split('@')[0]} foi removido por envio em massa de mídia.`, mentions: [senderId] }); } catch {}
-}
-return;
-}
-}
-const spam = db.spamMonitor.get(chatId) || new Map();
-const infoSpam = spam.get(senderId) || { count: 0, first: Date.now(), last: Date.now() };
-const agoraSpam = Date.now();
-if (agoraSpam - infoSpam.first > 5000) {
-infoSpam.count = 0;
-infoSpam.first = agoraSpam;
-}
-infoSpam.count += 1;
-infoSpam.last = agoraSpam;
-spam.set(senderId, infoSpam);
-db.spamMonitor.set(chatId, spam);
-if (infoSpam.count >= 3) {
-try { await sock.sendMessage(chatId, { delete: msg.key }); } catch {}
-if (!db.warns.has(chatId)) db.warns.set(chatId, new Map());
-const warnAtual = db.warns.get(chatId).get(senderId) || 0;
-const warnNovo = warnAtual + 1;
-db.warns.get(chatId).set(senderId, warnNovo);
-salvarDados();
-await sock.sendMessage(chatId, { text: `⚠️ *FLOOD/SPAM DETECTADO*\n@${senderId.split('@')[0]}\nMensagens em massa em < 5s.\nAdvertência: ${warnNovo}/3`, mentions: [senderId] });
-if (warnNovo >= 3) {
-try { await sock.groupParticipantsUpdate(chatId, [senderId], 'remove'); } catch {}
-try { await sock.sendMessage(chatId, { text: `🚫 @${senderId.split('@')[0]} foi removido por excesso de spam.`, mentions: [senderId] }); } catch {}
-}
-return;
-}
-const palavrasBanidas = db.grupos.palavrasBanidas.get(chatId) || [];
-for (const palavra of palavrasBanidas) {
-if (fullText.toLowerCase().includes(palavra)) {
-try { await sock.sendMessage(chatId, { delete: msg.key }); } catch {}
-await sock.sendMessage(chatId, { text: `🚫 *PALAVRA PROIBIDA*\n@${senderId.split('@')[0]}`, mentions: [senderId] });
-return;
-}
-}
-const bloqueios = db.grupos.antiMidia.get(chatId);
-if (bloqueios && bloqueios.size > 0) {
-const m = msg.message;
-let tipo = null;
-if (m?.audioMessage) tipo = 'audio';
-else if (m?.videoMessage) tipo = 'video';
-else if (m?.imageMessage) tipo = 'imagem';
-else if (m?.documentMessage) tipo = 'documento';
-else if (m?.stickerMessage) tipo = 'sticker';
-else if (m?.productMessage) tipo = 'produto';
-else if (m?.orderMessage || m?.paymentMessage) tipo = 'pagamento';
-if (tipo && bloqueios.has(tipo)) {
-try { await sock.sendMessage(chatId, { delete: msg.key }); } catch {}
-await sock.sendMessage(chatId, { text: `🛡️ *${tipo.toUpperCase()} BLOQUEADO*\n@${senderId.split('@')[0]}`, mentions: [senderId] });
-return;
-}
-}
-}
-}
-
-// ══════════════════════════════════════════════════════════
 // ROTEADOR CENTRAL — COMANDOS SEM PREFIXO
 // ══════════════════════════════════════════════════════════
 if (fullText && !fullText.startsWith(CONFIG.prefix)) {
@@ -4192,23 +4252,23 @@ const { id: groupId, participants, action } = event;
 cacheMetadata.delete(groupId);
 const rawBotJid = sock.user?.id || '';
 const botJid = rawBotJid.includes(':') ? `${rawBotJid.split(':')[0]}@s.whatsapp.net` : rawBotJid;
+const lista = (participants || []).map(idParticipanteEvento).filter(Boolean);
 if (action === 'add') {
 const boasVindasMsg = db.grupos.boasvindas.get(groupId);
 if (boasVindasMsg) {
 try {
 const metadata = await getMetadataCached(sock, groupId);
-for (const participant of participants) {
-if (participant !== botJid) {
-const nome = `@${participant.split('@')[0]}`;
-const textoFinal = boasVindasMsg.replace(/@nome/g, nome).replace(/@grupo/g, metadata.subject);
+for (const participant of lista) {
+if (mesmoJid(participant, botJid)) continue;
+const nome = `@${String(participant).split('@')[0]}`;
+const textoFinal = boasVindasMsg.replace(/@nome/g, nome).replace(/@grupo/g, metadata.subject || 'Grupo');
 const cartao = await gerarCartaoBoasVindas(sock, participant, groupId);
 if (cartao) await sock.sendMessage(groupId, { image: cartao, caption: textoFinal, mentions: [participant] });
 else await sock.sendMessage(groupId, { text: textoFinal, mentions: [participant] });
 }
+} catch (e) { console.warn('boas-vindas:', e.message); }
 }
-} catch {}
-}
-if (participants.includes(botJid)) {
+if (lista.some(p => mesmoJid(p, botJid))) {
 if (!utils.isGroupSubscribed(groupId)) {
 await sock.sendMessage(groupId, { text: `❌ Este grupo não possui assinatura activa.\n📞 Contacte ${CONFIG.creator}: ${CONFIG.ownerNumber}` }).catch(() => {});
 setTimeout(() => { sock.groupLeave(groupId).catch(() => {}); }, 3000);
